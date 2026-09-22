@@ -46,7 +46,7 @@ import isaaclab.sim as sim_utils
 from isaaclab.assets import Articulation
 from isaaclab.managers import ActionManager
 from isaaclab.scene import InteractiveScene
-from isaaclab.utils import configclass
+from isaaclab.utils.configclass import configclass
 
 from nav_arena.embodiments import (
     NOVA_CARTER_ACTION_CFG,

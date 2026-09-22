@@ -49,7 +49,7 @@ from isaaclab.assets import Articulation, AssetBaseCfg
 from isaaclab.managers import ActionManager
 from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
 from isaaclab.sensors import RayCaster
-from isaaclab.utils import configclass
+from isaaclab.utils.configclass import configclass
 
 from nav_arena.embodiments import (
     NOVA_CARTER_ACTION_CFG,

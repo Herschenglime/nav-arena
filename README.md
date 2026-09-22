@@ -33,9 +33,12 @@ nav_arena/
     │   ├── __init__.py                # Scene package exports
     │   └── interior_agent.py          # Dynamic InteriorAgent USD scene loader & configs
     ├── tasks/                         # Navigation tasks, MDP terms, and evaluation metrics
+    │   ├── __init__.py                # Tasks package exports
+    │   └── point_nav.py               # PointNavTask & PointNavEnvCfg (MDP metrics, goals, contacts)
     └── scripts/                       # Verification tools and evaluation runners
         ├── verify_embodiment.py       # Standalone Nova Carter embodiment verification script
-        └── verify_scene.py            # InteriorAgent scene & robot embodiment verification script
+        ├── verify_scene.py            # InteriorAgent scene & robot embodiment verification script
+        └── verify_task.py             # PointNav task, goals, reset, and collision verification script
 ```
 
 ---
@@ -78,6 +81,31 @@ python -u nav_arena/nav_arena/scripts/verify_scene.py --scene kujiale_0004
 python -u nav_arena/nav_arena/scripts/verify_scene.py --viz kit --loop
 ```
 
+### PointNav Task & Metrics Verification
+Instantiates the full `ManagerBasedRLEnv`-derived `PointNavTask`, exercises goal generation and tracking (`UniformPose2dCommandCfg`), drives the robot forward to verify goal reach termination, checks state restoration upon episode reset, and tests wall impact contact detection (`ContactSensorCfg` / `illegal_contact`).
+
+#### Headless Verification
+Runs the automated test suite (goal tracking, forward locomotion, goal reach termination, episode reset, and wall collision impact):
+
+```bash
+source setup.env
+# Run automated verification suite on default scene
+python -u nav_arena/nav_arena/scripts/verify_task.py
+
+# Run on a different scene (e.g. kujiale_0004)
+python -u nav_arena/nav_arena/scripts/verify_task.py --scene kujiale_0004
+```
+
+#### Visual Inspection (Interactive Viewport Window)
+Launches the native Omniverse Kit GUI window on your active monitor (`DISPLAY`), frames the living room corridor and target green arrow goal marker with an external camera, and visually renders the complete verification sequence (goal reach, reset, and wall collision impact):
+
+```bash
+source setup.env
+python -u nav_arena/nav_arena/scripts/verify_task.py --viz kit
+```
+
+*(Note: On the first launch on GB10 / aarch64, allow ~60–90 seconds for Vulkan shader compilation before the viewport window renders).*
+
 ### Interactive GUI Visualization (Embodiment)
 Launches the native Omniverse Kit viewport on your active monitor (`DISPLAY`), tracks Nova Carter with an external camera, and continuously runs test maneuvers:
 
@@ -96,3 +124,5 @@ python -u nav_arena/nav_arena/scripts/verify_embodiment.py --viz kit --loop
 - **Ground Clearance**: Mobile robots must spawn with ground clearance (e.g. `pos=(0.0, 0.0, 0.25)`) to avoid PhysX collision penetration depenetration impulses.
 - **OmniGraph Extension Booting**: Scripts using ActionGraphs must inject `--enable omni.graph --enable omni.graph.action --enable isaacsim.ros2.bridge --enable isaacsim.ros2.nodes` into `sys.argv` before `AppLauncher` is instantiated.
 - **Global Scene & Multi-Mesh Raycasting**: Indoor USD environments (like InteriorAgent) are loaded as a single global stage asset at `/World/Scene`. 2D planar LiDAR uses Isaac Lab's `MultiMeshRayCasterCfg` (`merge_prim_meshes=True`, `track_mesh_transforms=False`) to unify all room and obstacle sub-meshes for real-time GPU raycasting.
+- **MDP Task & Metric Architecture**: `PointNavTask` inherits from Isaac Lab's `ManagerBasedRLEnv`. Goal poses are generated and tracked with `UniformPose2dCommandCfg` with visual arrow markers in the viewport. Collision metrics specifically bind a `ContactSensorCfg` to `{ENV_REGEX_NS}/Robot/chassis_link` so wheel-ground contacts do not trigger false-positive collisions while chassis impacts immediately register `illegal_contact`.
+- **ConfigClass Import Convention**: Always import `configclass` as `from isaaclab.utils.configclass import configclass` to prevent namespace collisions where submodule imports overwrite the function handle.

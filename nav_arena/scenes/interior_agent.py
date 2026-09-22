@@ -15,7 +15,7 @@ import isaaclab.sim as sim_utils
 from isaaclab.assets import AssetBaseCfg
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors.ray_caster import MultiMeshRayCasterCfg
-from isaaclab.utils import configclass
+from isaaclab.utils.configclass import configclass
 
 from nav_arena.embodiments import (
     NOVA_CARTER_CFG,
