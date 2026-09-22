@@ -1,28 +1,79 @@
 # Nav Arena
 
-A lightweight, modular navigation evaluation framework built on top of NVIDIA Isaac Sim 6.1.0 and Isaac Lab 3.0.0.
+A lightweight, modular multi-embodiment navigation simulation and evaluation framework built on native **NVIDIA Isaac Sim 6.1.0** and **Isaac Lab 3.0.0** on `aarch64` Linux (Ubuntu 24.04 / NVIDIA GB10).
 
-## Overview
-`nav_arena` provides a benchmarking and evaluation testbed for autonomous navigation policies. It supports:
-- **Modular Embodiments:** Extensible robot base and sensor definitions (Nova Carter, wheeled, legged).
-- **Scene Ingestion:** Native OpenUSD scene loading (e.g., InteriorAgent).
-- **ROS 2 Integration:** Passive simulation execution supporting external Nav2 stacks via standard ROS 2 interfaces.
-- **Task Evaluation:** Modular task definitions and metrics for navigation benchmarks.
+---
 
-## Repository Structure
+## 1. Overview
+
+`nav_arena` is designed to benchmark multi-embodiment navigation policies and Nav2 stacks in photorealistic, physics-rich environments. The framework decouples robot kinematics, sensor rigging, and scene definitions through modular Python configurations, interfacing seamlessly with external autonomy stacks over standard ROS 2 topics.
+
+### Key Capabilities
+- **Modular Embodiment Factory**: Declarative robot configurations with kinematic abstractions (`DifferentialDriveAction` via Isaac Lab's `ActionManager`).
+- **Python-Rigged Sensors**: Programmatically attaches sensors (e.g. 2D planar LiDAR via `RayCasterCfg`) to mobile base links without modifying upstream USD assets.
+- **Native ROS 2 Integration**: Built-in OmniGraph bridges for simulation clock synchronization (`/clock`), odometry (`/odom`), transform frames (`/tf`), and command velocity reception (`/cmd_vel`).
+- **Multi-Modal Visual Execution**: Supports headless evaluation, remote WebRTC livestreaming, and interactive local Omniverse Kit GUI (`--viz kit`).
+
+---
+
+## 2. Repository Structure
+
 ```text
 nav_arena/
-├── pyproject.toml
-├── README.md
+├── pyproject.toml                     # Package specification (editable pip install)
+├── README.md                          # Project documentation and usage guide
 └── nav_arena/
-    ├── embodiments/     # Robot configurations and sensor factories
-    ├── scenes/          # Scene and environment configurations
-    ├── tasks/           # Navigation tasks, MDP terms, and evaluation metrics
-    └── scripts/         # Execution scripts and runners
+    ├── embodiments/                   # Robot kinematics, sensors, and ROS 2 bridges
+    │   ├── __init__.py                # Embodiment package exports
+    │   ├── actions.py                 # DifferentialDriveAction ActionTerm ([v, w] -> wheel speeds)
+    │   ├── nova_carter.py             # NVIDIA Nova Carter articulation and actuator config
+    │   ├── sensors.py                 # 2D planar LiDAR sensor factory (RayCasterCfg)
+    │   └── ros2_bridge.py             # ROS 2 OmniGraphs (Clock, Odometry, TF) and Twist receiver
+    ├── scenes/                        # Photorealistic scene loaders (e.g. InteriorAgent OpenUSD)
+    ├── tasks/                         # Navigation tasks, MDP terms, and evaluation metrics
+    └── scripts/                       # Verification tools and evaluation runners
+        └── verify_embodiment.py       # Standalone Nova Carter embodiment verification script
 ```
 
-## Installation
-In your activated Isaac Lab Python environment:
+---
+
+## 3. Installation
+
+Ensure your Isaac Lab virtual environment (`env_isaaclab`) and ROS 2 Jazzy workspace are configured:
+
 ```bash
-pip install -e .
+source setup.env
+pip install -e nav_arena
 ```
+
+---
+
+## 4. Usage & Verification
+
+All commands are executed from the base workspace directory (`~/simulation`).
+
+### Headless Verification
+Runs 60 simulation steps, exercises the `DifferentialDriveAction` controller, reads 2D LiDAR range arrays, and validates displacement:
+
+```bash
+source setup.env
+python -u nav_arena/nav_arena/scripts/verify_embodiment.py
+```
+
+### Interactive GUI Visualization
+Launches the native Omniverse Kit viewport on your active monitor (`DISPLAY`), tracks Nova Carter with an external camera, and continuously runs test maneuvers:
+
+```bash
+source setup.env
+python -u nav_arena/nav_arena/scripts/verify_embodiment.py --viz kit --loop
+```
+
+*(Note: On the first launch on GB10 / aarch64, allow ~60–90 seconds for Vulkan shader compilation before the viewport window renders).*
+
+---
+
+## 5. Implementation Notes & Invariants
+
+- **Quaternion Ordering**: Isaac Lab's `AssetBaseCfg.InitialStateCfg.rot` expects `(x, y, z, w)`. Identity rotation is `(0.0, 0.0, 0.0, 1.0)`.
+- **Ground Clearance**: Mobile robots must spawn with ground clearance (e.g. `pos=(0.0, 0.0, 0.25)`) to avoid PhysX collision penetration depenetration impulses.
+- **OmniGraph Extension Booting**: Scripts using ActionGraphs must inject `--enable omni.graph --enable omni.graph.action --enable isaacsim.ros2.bridge --enable isaacsim.ros2.nodes` into `sys.argv` before `AppLauncher` is instantiated.
