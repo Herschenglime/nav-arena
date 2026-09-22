@@ -30,9 +30,12 @@ nav_arena/
     │   ├── sensors.py                 # 2D planar LiDAR sensor factory (RayCasterCfg)
     │   └── ros2_bridge.py             # ROS 2 OmniGraphs (Clock, Odometry, TF) and Twist receiver
     ├── scenes/                        # Photorealistic scene loaders (e.g. InteriorAgent OpenUSD)
+    │   ├── __init__.py                # Scene package exports
+    │   └── interior_agent.py          # Dynamic InteriorAgent USD scene loader & configs
     ├── tasks/                         # Navigation tasks, MDP terms, and evaluation metrics
     └── scripts/                       # Verification tools and evaluation runners
-        └── verify_embodiment.py       # Standalone Nova Carter embodiment verification script
+        ├── verify_embodiment.py       # Standalone Nova Carter embodiment verification script
+        └── verify_scene.py            # InteriorAgent scene & robot embodiment verification script
 ```
 
 ---
@@ -52,7 +55,7 @@ pip install -e nav_arena
 
 All commands are executed from the base workspace directory (`~/simulation`).
 
-### Headless Verification
+### Embodiment Verification
 Runs 60 simulation steps, exercises the `DifferentialDriveAction` controller, reads 2D LiDAR range arrays, and validates displacement:
 
 ```bash
@@ -60,7 +63,22 @@ source setup.env
 python -u nav_arena/nav_arena/scripts/verify_embodiment.py
 ```
 
-### Interactive GUI Visualization
+### Scene & Navigation Verification (InteriorAgent)
+Loads an InteriorAgent USD scene (defaults to `kujiale_0003`, or pass `--scene <name_or_path>`), settles Nova Carter on the floor geometry, drives forward, and verifies 360° LiDAR raycasting:
+
+```bash
+source setup.env
+# Run headless verification on default scene
+python -u nav_arena/nav_arena/scripts/verify_scene.py
+
+# Run on a different scene (e.g. kujiale_0004)
+python -u nav_arena/nav_arena/scripts/verify_scene.py --scene kujiale_0004
+
+# Run with interactive GUI window
+python -u nav_arena/nav_arena/scripts/verify_scene.py --viz kit --loop
+```
+
+### Interactive GUI Visualization (Embodiment)
 Launches the native Omniverse Kit viewport on your active monitor (`DISPLAY`), tracks Nova Carter with an external camera, and continuously runs test maneuvers:
 
 ```bash
@@ -77,3 +95,4 @@ python -u nav_arena/nav_arena/scripts/verify_embodiment.py --viz kit --loop
 - **Quaternion Ordering**: Isaac Lab's `AssetBaseCfg.InitialStateCfg.rot` expects `(x, y, z, w)`. Identity rotation is `(0.0, 0.0, 0.0, 1.0)`.
 - **Ground Clearance**: Mobile robots must spawn with ground clearance (e.g. `pos=(0.0, 0.0, 0.25)`) to avoid PhysX collision penetration depenetration impulses.
 - **OmniGraph Extension Booting**: Scripts using ActionGraphs must inject `--enable omni.graph --enable omni.graph.action --enable isaacsim.ros2.bridge --enable isaacsim.ros2.nodes` into `sys.argv` before `AppLauncher` is instantiated.
+- **Global Scene & Multi-Mesh Raycasting**: Indoor USD environments (like InteriorAgent) are loaded as a single global stage asset at `/World/Scene`. 2D planar LiDAR uses Isaac Lab's `MultiMeshRayCasterCfg` (`merge_prim_meshes=True`, `track_mesh_transforms=False`) to unify all room and obstacle sub-meshes for real-time GPU raycasting.
