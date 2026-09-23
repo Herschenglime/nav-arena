@@ -22,23 +22,31 @@ A lightweight, modular multi-embodiment navigation simulation and evaluation fra
 nav_arena/
 ├── pyproject.toml                     # Package specification (editable pip install)
 ├── README.md                          # Project documentation and usage guide
-└── nav_arena/
-    ├── embodiments/                   # Robot kinematics, sensors, and ROS 2 bridges
-    │   ├── __init__.py                # Embodiment package exports
-    │   ├── actions.py                 # DifferentialDriveAction ActionTerm ([v, w] -> wheel speeds)
-    │   ├── nova_carter.py             # NVIDIA Nova Carter articulation and actuator config
-    │   ├── sensors.py                 # 2D planar LiDAR sensor factory (RayCasterCfg)
-    │   └── ros2_bridge.py             # ROS 2 OmniGraphs (Clock, Odometry, TF) and Twist receiver
-    ├── scenes/                        # Photorealistic scene loaders (e.g. InteriorAgent OpenUSD)
-    │   ├── __init__.py                # Scene package exports
-    │   └── interior_agent.py          # Dynamic InteriorAgent USD scene loader & configs
-    ├── tasks/                         # Navigation tasks, MDP terms, and evaluation metrics
-    │   ├── __init__.py                # Tasks package exports
-    │   └── point_nav.py               # PointNavTask & PointNavEnvCfg (MDP metrics, goals, contacts)
-    └── scripts/                       # Verification tools and evaluation runners
-        ├── verify_embodiment.py       # Standalone Nova Carter embodiment verification script
-        ├── verify_scene.py            # InteriorAgent scene & robot embodiment verification script
-        └── verify_task.py             # PointNav task, goals, reset, and collision verification script
+├── nav_arena/                         # Core RL environments and scenes (pure Python)
+│   ├── embodiments/                   # Robot kinematics, sensors, and ROS 2 bridges
+│   │   ├── __init__.py                # Embodiment package exports
+│   │   ├── actions.py                 # DifferentialDriveAction ActionTerm ([v, w] -> wheel speeds)
+│   │   ├── nova_carter.py             # NVIDIA Nova Carter articulation and actuator config
+│   │   ├── sensors.py                 # 2D planar LiDAR sensor factory (RayCasterCfg)
+│   │   └── ros2_bridge.py             # ROS 2 OmniGraphs (Clock, Odometry, TF) and Twist receiver
+│   ├── scenes/                        # Photorealistic scene loaders (e.g. InteriorAgent OpenUSD)
+│   │   ├── __init__.py                # Scene package exports
+│   │   └── interior_agent.py          # Dynamic InteriorAgent USD scene loader & configs
+│   ├── tasks/                         # Navigation tasks, MDP terms, and evaluation metrics
+│   │   ├── __init__.py                # Tasks package exports
+│   │   └── point_nav.py               # PointNavTask & PointNavEnvCfg (MDP metrics, goals, contacts)
+│   └── scripts/                       # Verification tools and standalone tests
+│       ├── verify_embodiment.py       # Standalone Nova Carter embodiment verification script
+│       ├── verify_scene.py            # InteriorAgent scene & robot embodiment verification script
+│       └── verify_task.py             # PointNav task, goals, reset, and collision verification script
+└── nav_arena_ros/                     # Colocated ROS 2 wrapper package (ament_python)
+    ├── package.xml                    # ROS 2 package manifest
+    ├── setup.py                       # ament_python build specification
+    ├── launch/
+    │   └── integration_test.launch.py # Lifecycle orchestration launch file
+    └── nav_arena_ros/
+        ├── ros2_policy_runner.py      # LifecycleNode wrapping PointNavTask in Isaac Lab
+        └── dummy_ros2_policy.py       # Test P-controller policy node
 ```
 
 ---
@@ -49,7 +57,11 @@ Ensure your Isaac Lab virtual environment (`env_isaaclab`) and ROS 2 Jazzy works
 
 ```bash
 source setup.env
+# 1. Install core RL simulation package in editable mode
 pip install -e nav_arena
+
+# 2. Build colocated ROS 2 integration package
+colcon build --symlink-install --base-paths nav_arena/nav_arena_ros
 ```
 
 ---
@@ -91,9 +103,6 @@ Runs the automated test suite (goal tracking, forward locomotion, goal reach ter
 source setup.env
 # Run automated verification suite on default scene
 python -u nav_arena/nav_arena/scripts/verify_task.py
-
-# Run on a different scene (e.g. kujiale_0004)
-python -u nav_arena/nav_arena/scripts/verify_task.py --scene kujiale_0004
 ```
 
 #### Visual Inspection (Interactive Viewport Window)
@@ -104,17 +113,14 @@ source setup.env
 python -u nav_arena/nav_arena/scripts/verify_task.py --viz kit
 ```
 
-*(Note: On the first launch on GB10 / aarch64, allow ~60–90 seconds for Vulkan shader compilation before the viewport window renders).*
-
-### Interactive GUI Visualization (Embodiment)
-Launches the native Omniverse Kit viewport on your active monitor (`DISPLAY`), tracks Nova Carter with an external camera, and continuously runs test maneuvers:
+### ROS 2 Integration & Testing
+We provide an orchestrated ROS 2 launch file that launches the Isaac Lab `PointNavTask` environment as a managed **ROS 2 Lifecycle Node** alongside a dummy ROS 2 policy and RViz2. 
+Using ROS 2 lifecycle state transitions (`OnStateTransition`), the test policy and RViz2 are only launched once Isaac Lab has fully configured the USD stage, compiled shaders, and reached the `ACTIVE` state.
 
 ```bash
 source setup.env
-python -u nav_arena/nav_arena/scripts/verify_embodiment.py --viz kit --loop
+ros2 launch nav_arena_ros integration_test.launch.py
 ```
-
-*(Note: On the first launch on GB10 / aarch64, allow ~60–90 seconds for Vulkan shader compilation before the viewport window renders).*
 
 ---
 
@@ -126,3 +132,8 @@ python -u nav_arena/nav_arena/scripts/verify_embodiment.py --viz kit --loop
 - **Global Scene & Multi-Mesh Raycasting**: Indoor USD environments (like InteriorAgent) are loaded as a single global stage asset at `/World/Scene`. 2D planar LiDAR uses Isaac Lab's `MultiMeshRayCasterCfg` (`merge_prim_meshes=True`, `track_mesh_transforms=False`) to unify all room and obstacle sub-meshes for real-time GPU raycasting.
 - **MDP Task & Metric Architecture**: `PointNavTask` inherits from Isaac Lab's `ManagerBasedRLEnv`. Goal poses are generated and tracked with `UniformPose2dCommandCfg` with visual arrow markers in the viewport. Collision metrics specifically bind a `ContactSensorCfg` to `{ENV_REGEX_NS}/Robot/chassis_link` so wheel-ground contacts do not trigger false-positive collisions while chassis impacts immediately register `illegal_contact`.
 - **ConfigClass Import Convention**: Always import `configclass` as `from isaaclab.utils.configclass import configclass` to prevent namespace collisions where submodule imports overwrite the function handle.
+
+### Known Constraints & Future Work
+- **Single-Threaded ROS 2 / Isaac Lab Integration Constraint**: The main evaluation runner script interleaves `env.step()` synchronously with `rclpy.spin_once()`. This is an MVP design decision ensuring deterministic, lockstep execution and preventing Python weakref invalidation from Kit. 
+  - **Future Work**: For high-throughput scaling or complex multi-agent parallel environments, this blocks the simulation loop during ROS 2 message processing (and vice-versa). Refactoring the ROS 2 spin loop into a background thread with thread-safe data queues will be required.
+- **Configurable Action Adapter (Legged Extensibility)**: The runner script utilizes an abstract `ActionAdapter` pattern to translate ROS 2 commands into the `env.step()` action tensor. Currently implemented as a `TwistActionAdapter` for wheeled robots, it is designed to be easily extensible for `JointCommandAdapter` deployments on quadruped systems.
