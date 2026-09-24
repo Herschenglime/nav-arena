@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 import rclpy
 
@@ -97,11 +98,25 @@ def main():
     action_adapter = TwistActionAdapter(num_envs=env.num_envs, device=env.device)
     state_publisher = TaskStatePublisherNode()
 
-    # Get goal coordinates and publish initial goal
+    # Query initial robot pose directly from simulation environment (single source of truth)
+    init_x, init_y, init_heading = env.get_robot_pose_w(0)
+    half_yaw = init_heading * 0.5
+    init_rot = (0.0, 0.0, math.sin(half_yaw), math.cos(half_yaw))
+
+    # Broadcast static transform linking canonical REP-105 'map' frame to 'odom' at robot spawn origin
+    state_publisher.broadcast_static_tf(
+        parent_frame="map",
+        child_frame="odom",
+        translation=(init_x, init_y, 0.0),
+        rotation=init_rot,
+    )
+    print(f"[INFO] Static TF published: map -> odom at ({init_x:.2f}, {init_y:.2f}, 0.00, yaw={init_heading:.2f})")
+
+    # Get goal coordinates and publish initial goal in 'map' frame
     goal_x, goal_y, goal_heading = env.get_goal_pose_w(0)
-    state_publisher.publish_goal_pose(x=goal_x, y=goal_y, heading=goal_heading, frame_id="odom")
-    print(f"[INFO] Goal published to /goal_pose (frame=odom): ({goal_x:.2f}, {goal_y:.2f}, heading={goal_heading:.2f})")
-    print("[INFO] Bridge ready. Listening on /cmd_vel and publishing /clock, /tf, /odom, /goal_pose.")
+    state_publisher.publish_goal_pose(x=goal_x, y=goal_y, heading=goal_heading, frame_id="map")
+    print(f"[INFO] Goal published to /goal_pose (frame=map): ({goal_x:.2f}, {goal_y:.2f}, heading={goal_heading:.2f})")
+    print("[INFO] Bridge ready. Listening on /cmd_vel and publishing /clock, /tf, /odom, /goal_pose, /goal_reached.")
 
     # 7. Main execution loop
     step_count = 0
@@ -119,7 +134,16 @@ def main():
             simulation_app.update()
 
             if dones.any():
-                print(f"[INFO] Goal reached or episode terminated at step {step_count}.")
+                is_goal = env.is_goal_reached(0)
+                is_collision = env.is_collision(0)
+                is_timeout = env.is_timed_out(0)
+                print(
+                    f"[INFO] Episode terminated at step {step_count}: "
+                    f"goal_reached={is_goal}, collision={is_collision}, timeout={is_timeout}"
+                )
+                if is_goal:
+                    state_publisher.publish_goal_reached(True)
+                    print("[INFO] Published True to /goal_reached (TRANSIENT_LOCAL).")
 
             step_count += 1
             if args_cli.num_steps > 0 and step_count >= args_cli.num_steps:

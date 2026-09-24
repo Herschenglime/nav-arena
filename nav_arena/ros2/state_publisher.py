@@ -10,12 +10,13 @@ from typing import Optional
 from geometry_msgs.msg import PoseStamped, TransformStamped
 from rclpy.node import Node
 from rclpy.parameter import Parameter
+from rclpy.qos import QoSDurabilityPolicy, QoSProfile
+from std_msgs.msg import Bool
 from tf2_ros.static_transform_broadcaster import StaticTransformBroadcaster
 
-from rclpy.qos import QoSProfile, QoSDurabilityPolicy
 
 class TaskStatePublisherNode(Node):
-    """ROS 2 node that broadcasts task-specific states such as navigation goal poses and static transforms."""
+    """ROS 2 node that broadcasts task-specific states such as navigation goal poses, static transforms, and completion status."""
 
     def __init__(self, node_name: str = "task_state_publisher", goal_topic: str = "/goal_pose", qos_depth: int = 1):
         """Initialize the task state publisher node.
@@ -29,12 +30,49 @@ class TaskStatePublisherNode(Node):
         # Enforce simulation time
         self.set_parameters([Parameter("use_sim_time", Parameter.Type.BOOL, True)])
 
-        # TRANSIENT_LOCAL ensures the goal pose persists for late subscribers without needing a high frequency loop
-        goal_qos = QoSProfile(
+        # TRANSIENT_LOCAL ensures the goal pose and completion status persist for late subscribers
+        latched_qos = QoSProfile(
             depth=qos_depth,
             durability=QoSDurabilityPolicy.TRANSIENT_LOCAL
         )
-        self.goal_pub = self.create_publisher(PoseStamped, goal_topic, goal_qos)
+        self.goal_pub = self.create_publisher(PoseStamped, goal_topic, latched_qos)
+        self.goal_reached_pub = self.create_publisher(Bool, "/goal_reached", latched_qos)
+        self.static_tf_broadcaster = StaticTransformBroadcaster(self)
+
+    def broadcast_static_tf(
+        self,
+        parent_frame: str,
+        child_frame: str,
+        translation: tuple[float, float, float] = (0.0, 0.0, 0.0),
+        rotation: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0),
+    ):
+        """Broadcast a static transform between two coordinate frames."""
+        t = TransformStamped()
+        t.header.stamp = self.get_clock().now().to_msg()
+        t.header.frame_id = parent_frame
+        t.child_frame_id = child_frame
+        t.transform.translation.x = float(translation[0])
+        t.transform.translation.y = float(translation[1])
+        t.transform.translation.z = float(translation[2])
+        t.transform.rotation.x = float(rotation[0])
+        t.transform.rotation.y = float(rotation[1])
+        t.transform.rotation.z = float(rotation[2])
+        t.transform.rotation.w = float(rotation[3])
+        self.static_tf_broadcaster.sendTransform(t)
+
+    def publish_goal_reached(self, reached: bool = True) -> Bool:
+        """Publish goal reached status.
+
+        Args:
+            reached: True if goal reached successfully, False otherwise.
+
+        Returns:
+            The published Bool message.
+        """
+        msg = Bool()
+        msg.data = bool(reached)
+        self.goal_reached_pub.publish(msg)
+        return msg
 
     def publish_goal_pose(
         self,
@@ -43,7 +81,7 @@ class TaskStatePublisherNode(Node):
         z: float = 0.0,
         heading: float = 0.0,
         quat: Optional[tuple[float, float, float, float]] = None,
-        frame_id: str = "world",
+        frame_id: str = "map",
     ) -> PoseStamped:
         """Publish a goal pose as a PoseStamped message.
 
