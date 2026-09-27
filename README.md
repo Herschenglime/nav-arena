@@ -6,6 +6,9 @@ A lightweight, modular multi-embodiment navigation simulation and evaluation fra
 
 ## 1. Overview
 
+### Project Goal
+The primary goal of this project is scaffolding **Isaac Lab Arena** to work natively for autonomous navigation tasks. It acts as a robust, fully-featured bridge to connect high-fidelity physics and photorealistic simulation directly to standard ROS 2 navigation stacks (such as Nav2) without friction.
+
 `nav_arena` is designed to benchmark multi-embodiment navigation policies and Nav2 stacks in photorealistic, physics-rich environments. The framework decouples robot kinematics, sensor rigging, and scene definitions through modular Python configurations, interfacing seamlessly with external autonomy stacks over standard ROS 2 topics.
 
 ### Key Capabilities
@@ -22,23 +25,21 @@ A lightweight, modular multi-embodiment navigation simulation and evaluation fra
 nav_arena/
 ├── pyproject.toml                     # Package specification (editable pip install)
 ├── README.md                          # Project documentation and usage guide
-└── nav_arena/
-    ├── embodiments/                   # Robot kinematics, sensors, and ROS 2 bridges
-    │   ├── __init__.py                # Embodiment package exports
-    │   ├── actions.py                 # DifferentialDriveAction ActionTerm ([v, w] -> wheel speeds)
-    │   ├── nova_carter.py             # NVIDIA Nova Carter articulation and actuator config
-    │   ├── sensors.py                 # 2D planar LiDAR sensor factory (RayCasterCfg)
-    │   └── ros2_bridge.py             # ROS 2 OmniGraphs (Clock, Odometry, TF) and Twist receiver
-    ├── scenes/                        # Photorealistic scene loaders (e.g. InteriorAgent OpenUSD)
-    │   ├── __init__.py                # Scene package exports
-    │   └── interior_agent.py          # Dynamic InteriorAgent USD scene loader & configs
-    ├── tasks/                         # Navigation tasks, MDP terms, and evaluation metrics
-    │   ├── __init__.py                # Tasks package exports
-    │   └── point_nav.py               # PointNavTask & PointNavEnvCfg (MDP metrics, goals, contacts)
-    └── scripts/                       # Verification tools and evaluation runners
-        ├── verify_embodiment.py       # Standalone Nova Carter embodiment verification script
-        ├── verify_scene.py            # InteriorAgent scene & robot embodiment verification script
-        └── verify_task.py             # PointNav task, goals, reset, and collision verification script
+├── nav_arena/
+│   ├── embodiments/                   # Robot kinematics and sensor factories (Nova Carter)
+│   ├── scenes/                        # Photorealistic scene loaders (InteriorAgent)
+│   ├── tasks/                         # PointNavTask, MDP metrics, goals, contacts
+│   ├── ros2/                          # Core ROS 2 Integration Architecture
+│   │   ├── adapters/                  # Action adapters (e.g., TwistActionAdapter)
+│   │   ├── graph_builder.py           # OmniGraph builder for clock, TF, and odometry
+│   │   └── state_publisher.py         # TaskStatePublisherNode (TF, /goal_pose, /goal_reached)
+│   └── scripts/                       
+│       ├── run_ros2_nav.py            # Main execution orchestrator for the ROS 2 bridge
+│       └── verify_*.py                # Standalone verification tools (scene, task, embodiment)
+└── tests/
+    └── ros2/                          # Automated PyTest integration suite
+        ├── test_state_publisher.py    # Validates static TF and latched QoS
+        └── test_closed_loop.py        # End-to-end simulated driving and ROS 2 bridging test
 ```
 
 ---
@@ -116,6 +117,26 @@ python -u nav_arena/nav_arena/scripts/verify_embodiment.py --viz kit --loop
 
 *(Note: On the first launch on GB10 / aarch64, allow ~60–90 seconds for Vulkan shader compilation before the viewport window renders).*
 
+### ROS 2 Bridge & Closed-Loop Integration
+The primary orchestrator boots the simulation, establishes the ROS 2 bridge (Clock, TF, Odom), and listens to `/cmd_vel` to drive the robot.
+
+**Interactive Execution with RViz2:**
+```bash
+source setup.env
+# Terminal 1: Launch the simulation bridge
+python -u nav_arena/nav_arena/scripts/run_ros2_nav.py
+
+# Terminal 2: Launch RViz to visualize the relative map and odom TF poses, and the location of the goal
+rviz2 -d nav_arena/nav_arena/config/nav_arena.rviz
+```
+
+**Automated End-to-End Verification:**
+To run the closed-loop driving test (verifying that a script can publish `/cmd_vel` and successfully reach the goal state):
+```bash
+source setup.env
+python -u nav_arena/tests/ros2/test_closed_loop.py
+```
+
 ---
 
 ## 5. Implementation Notes & Invariants
@@ -126,3 +147,5 @@ python -u nav_arena/nav_arena/scripts/verify_embodiment.py --viz kit --loop
 - **Global Scene & Multi-Mesh Raycasting**: Indoor USD environments (like InteriorAgent) are loaded as a single global stage asset at `/World/Scene`. 2D planar LiDAR uses Isaac Lab's `MultiMeshRayCasterCfg` (`merge_prim_meshes=True`, `track_mesh_transforms=False`) to unify all room and obstacle sub-meshes for real-time GPU raycasting.
 - **MDP Task & Metric Architecture**: `PointNavTask` inherits from Isaac Lab's `ManagerBasedRLEnv`. Goal poses are generated and tracked with `UniformPose2dCommandCfg` with visual arrow markers in the viewport. Collision metrics specifically bind a `ContactSensorCfg` to `{ENV_REGEX_NS}/Robot/chassis_link` so wheel-ground contacts do not trigger false-positive collisions while chassis impacts immediately register `illegal_contact`.
 - **ConfigClass Import Convention**: Always import `configclass` as `from isaaclab.utils.configclass import configclass` to prevent namespace collisions where submodule imports overwrite the function handle.
+- **Standard Coordinate Frames (REP-105)**: While Isaac Sim defaults its root to `world`, standard ROS 2 navigation packages strictly expect the `map -> odom -> base_link` tree. Our bridge dynamically queries the robot spawn and publishes a static `map -> odom` transform to bridge the two ecosystems seamlessly.
+- **Latched Topic QoS**: Task state topics that publish once per episode (e.g., `/goal_pose` and `/goal_reached`) must use `TRANSIENT_LOCAL` durability with depth 1. This prevents late-joining test runners or metric recorders from missing the termination signals due to race conditions.
