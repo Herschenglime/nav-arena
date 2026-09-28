@@ -85,6 +85,11 @@ class NovaCarterEmbodimentCfg:
     name: str = "nova_carter"
     wheel_radius: float = 0.14
     wheel_base: float = 0.413
+    base_frame: str = "base_link"
     chassis_frame: str = "chassis_link"
+    lidar_frame: str = "lidar_link"
     sensor_height: float = 0.35
+    lidar_offset: tuple[float, float, float] = (0.0, 0.0, 0.35)
+    robot_radius: float = 0.28
+    robot_height: float = 0.40
 

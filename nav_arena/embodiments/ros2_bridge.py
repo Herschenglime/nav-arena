@@ -45,6 +45,7 @@ def setup_ros2_odometry(
     odometry_topic: str = "/odom",
     tf_topic: str = "/tf",
     node_namespace: str = "",
+    chassis_frame_id: str = "base_link",
 ) -> str | None:
     """Create ROS 2 Odometry and TF publisher OmniGraph for the mobile base.
 
@@ -55,6 +56,7 @@ def setup_ros2_odometry(
         odometry_topic: Topic name for nav_msgs/Odometry.
         tf_topic: Topic name for tf2_msgs/TFMessage.
         node_namespace: ROS 2 node namespace.
+        chassis_frame_id: Base frame ID published in odometry and TF (defaults to 'base_link').
 
     Returns:
         Graph prim path on success, None on failure.
@@ -64,6 +66,7 @@ def setup_ros2_odometry(
 
         enable_extension("isaacsim.ros2.nodes")
         from isaacsim.ros2.nodes import Ros2OdometryGraphConfig, create_ros2_odometry_graph
+        import omni.graph.core as og
 
         config = Ros2OdometryGraphConfig(
             graph_path=graph_path,
@@ -72,10 +75,20 @@ def setup_ros2_odometry(
             odometry_topic=odometry_topic,
             tf_topic=tf_topic,
             node_namespace=node_namespace,
-            publish_robot_tf=True,
+            publish_robot_tf=False,
         )
 
-        return create_ros2_odometry_graph(config)
+        result = create_ros2_odometry_graph(config)
+
+        if chassis_frame_id:
+            tf_node = og.Controller.node(f"{graph_path}/TFOdom2Robot")
+            if tf_node.is_valid():
+                og.Controller.set(og.Controller.attribute(f"{graph_path}/TFOdom2Robot.inputs:childFrameId"), chassis_frame_id)
+            odom_node = og.Controller.node(f"{graph_path}/PublisherOdometry")
+            if odom_node.is_valid():
+                og.Controller.set(og.Controller.attribute(f"{graph_path}/PublisherOdometry.inputs:chassisFrameId"), chassis_frame_id)
+
+        return result
 
     except Exception as e:
         logger.warning(f"Failed to create ROS 2 odometry graph: {e}")
