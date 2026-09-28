@@ -24,6 +24,8 @@ def generate_minimal_urdf(
     lidar_offset: tuple[float, float, float] = (0.0, 0.0, 0.35),
     robot_radius: float = 0.28,
     robot_height: float = 0.40,
+    chassis_size: tuple[float, float, float] | None = None,
+    chassis_offset: tuple[float, float, float] | None = None,
 ) -> str:
     """Generate a clean, minimal URDF XML string from an embodiment configuration.
 
@@ -37,6 +39,8 @@ def generate_minimal_urdf(
         lidar_offset: (x, y, z) translation offset of LiDAR relative to chassis_frame.
         robot_radius: Radius in meters for the cylindrical visual/collision body.
         robot_height: Height in meters for the cylindrical visual/collision body.
+        chassis_size: Optional (length, width, height) in meters for a box chassis.
+        chassis_offset: Optional (x, y, z) translation of box center relative to base_frame.
 
     Returns:
         A formatted, valid URDF XML string ready for robot_state_publisher.
@@ -52,28 +56,47 @@ def generate_minimal_urdf(
             lidar_offset = (0.0, 0.0, float(cfg.sensor_height))
         robot_radius = getattr(cfg, "robot_radius", robot_radius)
         robot_height = getattr(cfg, "robot_height", robot_height)
+        chassis_size = getattr(cfg, "chassis_size", chassis_size)
+        chassis_offset = getattr(cfg, "chassis_offset", chassis_offset)
 
     robot = ET.Element("robot", name=str(name))
 
     # 1. Base footprint / root link
     base_link = ET.SubElement(robot, "link", name=str(base_frame))
 
-    # 2. Chassis link with geometric cylinder representation
+    # 2. Chassis link representation (rectangular box if chassis_size provided, else cylinder)
     chassis_link = ET.SubElement(robot, "link", name=str(chassis_frame))
 
-    # Visual
-    visual = ET.SubElement(chassis_link, "visual")
-    ET.SubElement(visual, "origin", xyz=f"0 0 {robot_height / 2.0:.4f}", rpy="0 0 0")
-    vis_geom = ET.SubElement(visual, "geometry")
-    ET.SubElement(vis_geom, "cylinder", radius=f"{robot_radius:.4f}", length=f"{robot_height:.4f}")
-    mat = ET.SubElement(visual, "material", name="chassis_mat")
-    ET.SubElement(mat, "color", rgba="0.2 0.5 0.8 0.8")
+    if chassis_size is not None:
+        ox, oy, oz = chassis_offset if chassis_offset else (-0.2335, 0.0, chassis_size[2] / 2.0)
+        sx, sy, sz = chassis_size
+        # Visual
+        visual = ET.SubElement(chassis_link, "visual")
+        ET.SubElement(visual, "origin", xyz=f"{ox:.4f} {oy:.4f} {oz:.4f}", rpy="0 0 0")
+        vis_geom = ET.SubElement(visual, "geometry")
+        ET.SubElement(vis_geom, "box", size=f"{sx:.4f} {sy:.4f} {sz:.4f}")
+        mat = ET.SubElement(visual, "material", name="chassis_mat")
+        ET.SubElement(mat, "color", rgba="0.2 0.5 0.8 0.8")
 
-    # Collision
-    collision = ET.SubElement(chassis_link, "collision")
-    ET.SubElement(collision, "origin", xyz=f"0 0 {robot_height / 2.0:.4f}", rpy="0 0 0")
-    coll_geom = ET.SubElement(collision, "geometry")
-    ET.SubElement(coll_geom, "cylinder", radius=f"{robot_radius:.4f}", length=f"{robot_height:.4f}")
+        # Collision
+        collision = ET.SubElement(chassis_link, "collision")
+        ET.SubElement(collision, "origin", xyz=f"{ox:.4f} {oy:.4f} {oz:.4f}", rpy="0 0 0")
+        coll_geom = ET.SubElement(collision, "geometry")
+        ET.SubElement(coll_geom, "box", size=f"{sx:.4f} {sy:.4f} {sz:.4f}")
+    else:
+        # Visual
+        visual = ET.SubElement(chassis_link, "visual")
+        ET.SubElement(visual, "origin", xyz=f"0 0 {robot_height / 2.0:.4f}", rpy="0 0 0")
+        vis_geom = ET.SubElement(visual, "geometry")
+        ET.SubElement(vis_geom, "cylinder", radius=f"{robot_radius:.4f}", length=f"{robot_height:.4f}")
+        mat = ET.SubElement(visual, "material", name="chassis_mat")
+        ET.SubElement(mat, "color", rgba="0.2 0.5 0.8 0.8")
+
+        # Collision
+        collision = ET.SubElement(chassis_link, "collision")
+        ET.SubElement(collision, "origin", xyz=f"0 0 {robot_height / 2.0:.4f}", rpy="0 0 0")
+        coll_geom = ET.SubElement(collision, "geometry")
+        ET.SubElement(coll_geom, "cylinder", radius=f"{robot_radius:.4f}", length=f"{robot_height:.4f}")
 
     # Joint: base_frame -> chassis_frame
     base_to_chassis = ET.SubElement(robot, "joint", name=f"{base_frame}_to_{chassis_frame}", type="fixed")

@@ -42,7 +42,7 @@ def build_ros2_omnigraph(
                 ("PublishClock", "isaacsim.ros2.bridge.ROS2PublishClock"),
                 ("ComputeOdom", "isaacsim.core.nodes.IsaacComputeOdometry"),
                 ("PublishOdom", "isaacsim.ros2.bridge.ROS2PublishOdometry"),
-                ("PublishTF", "isaacsim.ros2.bridge.ROS2PublishTransformTree"),
+                ("PublishRawTF", "isaacsim.ros2.bridge.ROS2PublishRawTransformTree"),
             ],
             keys.CONNECT: [
                 ("OnPlaybackTick.outputs:tick", "PublishClock.inputs:execIn"),
@@ -54,15 +54,19 @@ def build_ros2_omnigraph(
                 ("ComputeOdom.outputs:orientation", "PublishOdom.inputs:orientation"),
                 ("ComputeOdom.outputs:linearVelocity", "PublishOdom.inputs:linearVelocity"),
                 ("ComputeOdom.outputs:angularVelocity", "PublishOdom.inputs:angularVelocity"),
-                ("OnPlaybackTick.outputs:tick", "PublishTF.inputs:execIn"),
-                ("ReadSimTime.outputs:simulationTime", "PublishTF.inputs:timeStamp"),
+                ("OnPlaybackTick.outputs:tick", "PublishRawTF.inputs:execIn"),
+                ("ReadSimTime.outputs:simulationTime", "PublishRawTF.inputs:timeStamp"),
+                ("ComputeOdom.outputs:position", "PublishRawTF.inputs:translation"),
+                ("ComputeOdom.outputs:orientation", "PublishRawTF.inputs:rotation"),
             ],
             keys.SET_VALUES: [
                 ("PublishClock.inputs:topicName", "clock"),
                 ("PublishOdom.inputs:topicName", odom_topic),
                 ("PublishOdom.inputs:odomFrameId", odom_frame),
                 ("PublishOdom.inputs:chassisFrameId", base_frame),
-                ("PublishTF.inputs:topicName", "tf"),
+                ("PublishRawTF.inputs:topicName", "tf"),
+                ("PublishRawTF.inputs:parentFrameId", odom_frame),
+                ("PublishRawTF.inputs:childFrameId", base_frame),
             ],
         },
     )
@@ -77,14 +81,6 @@ def build_ros2_omnigraph(
         rel = odom_node_prim.GetRelationship("inputs:chassisPrim")
         if not rel.IsValid():
             rel = odom_node_prim.CreateRelationship("inputs:chassisPrim")
-        rel.SetTargets([target_path])
-
-    # Target prims for transform tree publishing
-    tf_node_prim = stage.GetPrimAtPath(f"{graph_path}/PublishTF")
-    if tf_node_prim.IsValid():
-        rel = tf_node_prim.GetRelationship("inputs:targetPrims")
-        if not rel.IsValid():
-            rel = tf_node_prim.CreateRelationship("inputs:targetPrims")
         rel.SetTargets([target_path])
 
     graph = og.get_graph_by_path(graph_path)

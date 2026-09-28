@@ -90,6 +90,16 @@ class NovaCarterEmbodimentCfg:
     lidar_frame: str = "lidar_link"
     sensor_height: float = 0.35
     lidar_offset: tuple[float, float, float] = (0.0, 0.0, 0.35)
-    robot_radius: float = 0.28
+    # Footprint polygon relative to base_link: [[x, y], ...]
+    # Nova Carter chassis extends +0.14m forward and -0.607m rearward, ±0.25m lateral
+    footprint: tuple[tuple[float, float], ...] = (
+        (0.14, 0.25),
+        (0.14, -0.25),
+        (-0.607, -0.25),
+        (-0.607, 0.25),
+    )
+    chassis_size: tuple[float, float, float] = (0.747, 0.50, 0.40)  # length, width, height (m)
+    chassis_offset: tuple[float, float, float] = (-0.2335, 0.0, 0.20)  # center of box relative to base_link
+    robot_radius: float = 0.28  # nominal half-width radius (for circular costmap approximations)
     robot_height: float = 0.40
 

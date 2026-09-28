@@ -27,6 +27,12 @@ def launch_setup(context: LaunchContext, *args, **kwargs):
     sensor_z = float(LaunchConfiguration("sensor_z").perform(context))
     robot_radius = float(LaunchConfiguration("robot_radius").perform(context))
     robot_height = float(LaunchConfiguration("robot_height").perform(context))
+    chassis_size_x = float(LaunchConfiguration("chassis_size_x").perform(context))
+    chassis_size_y = float(LaunchConfiguration("chassis_size_y").perform(context))
+    chassis_size_z = float(LaunchConfiguration("chassis_size_z").perform(context))
+    chassis_offset_x = float(LaunchConfiguration("chassis_offset_x").perform(context))
+    chassis_offset_y = float(LaunchConfiguration("chassis_offset_y").perform(context))
+    chassis_offset_z = float(LaunchConfiguration("chassis_offset_z").perform(context))
 
     urdf_xml = generate_minimal_urdf(
         name=robot_name,
@@ -36,6 +42,8 @@ def launch_setup(context: LaunchContext, *args, **kwargs):
         lidar_offset=(sensor_x, sensor_y, sensor_z),
         robot_radius=robot_radius,
         robot_height=robot_height,
+        chassis_size=(chassis_size_x, chassis_size_y, chassis_size_z),
+        chassis_offset=(chassis_offset_x, chassis_offset_y, chassis_offset_z),
     )
 
     rsp_node = Node(
@@ -66,6 +74,12 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument("sensor_z", default_value="0.35", description="LiDAR Z offset (m)"),
         DeclareLaunchArgument("robot_radius", default_value="0.28", description="Robot footprint radius (m)"),
         DeclareLaunchArgument("robot_height", default_value="0.40", description="Robot body height (m)"),
+        DeclareLaunchArgument("chassis_size_x", default_value="0.747", description="Chassis box length (m)"),
+        DeclareLaunchArgument("chassis_size_y", default_value="0.50", description="Chassis box width (m)"),
+        DeclareLaunchArgument("chassis_size_z", default_value="0.40", description="Chassis box height (m)"),
+        DeclareLaunchArgument("chassis_offset_x", default_value="-0.2335", description="Chassis box X offset (m)"),
+        DeclareLaunchArgument("chassis_offset_y", default_value="0.0", description="Chassis box Y offset (m)"),
+        DeclareLaunchArgument("chassis_offset_z", default_value="0.20", description="Chassis box Z offset (m)"),
         OpaqueFunction(function=launch_setup),
     ]
 

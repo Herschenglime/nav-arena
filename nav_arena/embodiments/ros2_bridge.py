@@ -26,10 +26,12 @@ def setup_ros2_clock(graph_path: str = "/ActionGraph/ROS_Clock") -> str | None:
         Graph prim path on success, None on failure.
     """
     try:
-        from isaacsim.core.experimental.utils.app import enable_extension
-
-        enable_extension("isaacsim.ros2.nodes")
-        from isaacsim.ros2.nodes import Ros2ClockGraphConfig, create_ros2_clock_graph
+        try:
+            from isaacsim.ros2.nodes import Ros2ClockGraphConfig, create_ros2_clock_graph
+        except ImportError:
+            from isaacsim.core.experimental.utils.app import enable_extension
+            enable_extension("isaacsim.ros2.nodes")
+            from isaacsim.ros2.nodes import Ros2ClockGraphConfig, create_ros2_clock_graph
 
         config = Ros2ClockGraphConfig(graph_path=graph_path)
         return create_ros2_clock_graph(config)
@@ -62,10 +64,12 @@ def setup_ros2_odometry(
         Graph prim path on success, None on failure.
     """
     try:
-        from isaacsim.core.experimental.utils.app import enable_extension
-
-        enable_extension("isaacsim.ros2.nodes")
-        from isaacsim.ros2.nodes import Ros2OdometryGraphConfig, create_ros2_odometry_graph
+        try:
+            from isaacsim.ros2.nodes import Ros2OdometryGraphConfig, create_ros2_odometry_graph
+        except ImportError:
+            from isaacsim.core.experimental.utils.app import enable_extension
+            enable_extension("isaacsim.ros2.nodes")
+            from isaacsim.ros2.nodes import Ros2OdometryGraphConfig, create_ros2_odometry_graph
         import omni.graph.core as og
 
         config = Ros2OdometryGraphConfig(
