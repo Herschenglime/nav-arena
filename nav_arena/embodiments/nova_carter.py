@@ -86,4 +86,5 @@ class NovaCarterEmbodimentCfg:
     wheel_radius: float = 0.14
     wheel_base: float = 0.413
     chassis_frame: str = "chassis_link"
+    sensor_height: float = 0.35
 
