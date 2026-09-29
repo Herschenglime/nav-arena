@@ -44,7 +44,7 @@ from isaaclab.utils.configclass import configclass
 
 from nav_arena.embodiments.nova_carter import NovaCarterEmbodimentCfg
 from nav_arena.maps import generate_occupancy_map, get_occupancy_map
-from nav_arena.scenes.interior_agent import resolve_interior_agent_usd
+from nav_arena.scenes.interior_agent import prepare_interior_agent_stage, resolve_interior_agent_usd
 
 
 @configclass
@@ -96,6 +96,7 @@ def verify_occupancy_map():
         z_max=z_max,
         cache_root=args_cli.output_dir,
         force_generate=args_cli.force,
+        stage_preprocessor=prepare_interior_agent_stage,
     )
 
 

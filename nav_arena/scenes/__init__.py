@@ -11,6 +11,7 @@ from .interior_agent import (
     DEFAULT_INTERIOR_AGENT_USD,
     InteriorAgentSceneCfg,
     create_interior_agent_scene_cfg,
+    prepare_interior_agent_stage,
     resolve_interior_agent_usd,
 )
 
@@ -20,5 +21,6 @@ __all__ = [
     "DEFAULT_INTERIOR_AGENT_USD",
     "InteriorAgentSceneCfg",
     "create_interior_agent_scene_cfg",
+    "prepare_interior_agent_stage",
     "resolve_interior_agent_usd",
 ]

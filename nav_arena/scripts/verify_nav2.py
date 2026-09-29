@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import math
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -19,8 +20,14 @@ from isaaclab.app import AppLauncher
 # 1. Parse arguments
 parser = argparse.ArgumentParser(description="Verify Nav2 autonomous navigation in nav_arena.")
 parser.add_argument("--scene", type=str, default="kujiale_0003", help="Scene ID or USD path.")
-parser.add_argument("--max-steps", type=int, default=1200, help="Max simulation steps for navigation.")
+parser.add_argument("--max-steps", type=int, default=2500, help="Max simulation steps for navigation.")
 parser.add_argument("--rviz", action="store_true", help="Launch RViz with Nav2.")
+parser.add_argument("--spawn-x", type=float, default=-6.42, help="Robot spawn X coordinate (m). Default: -6.42 (West bedroom)")
+parser.add_argument("--spawn-y", type=float, default=0.64, help="Robot spawn Y coordinate (m). Default: 0.64 (West bedroom)")
+parser.add_argument("--spawn-yaw", type=float, default=0.0, help="Robot spawn heading (rad). Default: 0.0")
+parser.add_argument("--goal-x", type=float, default=5.70, help="Navigation goal X coordinate (m). Default: 5.70 (East bedroom)")
+parser.add_argument("--goal-y", type=float, default=-1.52, help="Navigation goal Y coordinate (m). Default: -1.52 (East bedroom)")
+parser.add_argument("--goal-yaw", type=float, default=0.0, help="Navigation goal heading (rad). Default: 0.0")
 AppLauncher.add_app_launcher_args(parser)
 args_cli, _ = parser.parse_known_args()
 
@@ -44,7 +51,7 @@ import threading
 import carb.settings
 import rclpy
 from rclpy.executors import SingleThreadedExecutor
-from geometry_msgs.msg import PoseStamped, Twist
+from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Twist
 from lifecycle_msgs.msg import State
 from lifecycle_msgs.srv import GetState
 from nav_msgs.msg import OccupancyGrid, Path
@@ -52,8 +59,10 @@ from nav2_msgs.action import NavigateToPose
 from rclpy.action import ActionClient
 from rosgraph_msgs.msg import Clock
 
+import omni.usd
 from nav_arena.ros2 import LaserScanPublisherNode, TaskStatePublisherNode, build_ros2_omnigraph
 from nav_arena.ros2.adapters.action_adapter import TwistActionAdapter
+from nav_arena.scenes import prepare_interior_agent_stage
 from nav_arena.tasks import PointNavTask, create_point_nav_env_cfg
 
 
@@ -61,13 +70,16 @@ def run_nav2_verification():
     print("=" * 70)
     print("VERIFYING NAV2 AUTONOMOUS NAVIGATION IN SIMULATION")
     print(f"Scene: {args_cli.scene}")
+    print(f"Spawn: ({args_cli.spawn_x:.2f}, {args_cli.spawn_y:.2f}) [yaw={args_cli.spawn_yaw:.2f} rad]")
+    print(f"Goal:  ({args_cli.goal_x:.2f}, {args_cli.goal_y:.2f}) [yaw={args_cli.goal_yaw:.2f} rad]")
     print("=" * 70)
 
     # 4. Configure PointNavTask environment in kujiale_0003
-    spawn_pos = (-2.5, 0.0, 0.25)
-    spawn_rot = (0.0, 0.0, 0.0, 1.0)
-    goal_pos = (-1.0, 0.0)
-    goal_heading = 0.0
+    spawn_pos = (args_cli.spawn_x, args_cli.spawn_y, 0.25)
+    half_spawn_yaw = args_cli.spawn_yaw * 0.5
+    spawn_rot = (0.0, 0.0, math.sin(half_spawn_yaw), math.cos(half_spawn_yaw))
+    goal_pos = (args_cli.goal_x, args_cli.goal_y)
+    goal_heading = args_cli.goal_yaw
     goal_threshold = 0.40
 
     env_cfg = create_point_nav_env_cfg(
@@ -83,6 +95,12 @@ def run_nav2_verification():
 
     print("[INFO] Instantiating PointNavTask environment...")
     env = PointNavTask(cfg=env_cfg)
+
+    # Deactivate interior door prims so robot and LiDAR can navigate freely
+    stage = omni.usd.get_context().get_stage()
+    deactivated_doors = prepare_interior_agent_stage(stage)
+    if deactivated_doors > 0:
+        print(f"[INFO] Deactivated {deactivated_doors} door prims on live simulation stage.")
 
     # Position viewport camera to frame the robot and path
     env.sim.set_camera_view(eye=[-1.75, -2.8, 2.5], target=[-1.75, 0.0, 0.3])
@@ -118,6 +136,7 @@ def run_nav2_verification():
     test_node.create_subscription(Path, "/plan", lambda m: received_plans.append(m), 10)
     test_node.create_subscription(Twist, "/cmd_vel", lambda m: received_cmd_vels.append(m), 10)
     test_node.create_subscription(OccupancyGrid, "/global_costmap/costmap", lambda m: received_costmaps.append(m), 10)
+    initial_pose_pub = test_node.create_publisher(PoseWithCovarianceStamped, "/initialpose", 10)
     # NVIDIA standard lifecycle supervision: query bt_navigator/get_state
     lifecycle_client = test_node.create_client(GetState, "/bt_navigator/get_state")
 
@@ -141,11 +160,20 @@ def run_nav2_verification():
         launch_script,
         "use_sim_time:=true",
         f"rviz:={'true' if args_cli.rviz else 'false'}",
+        f"initial_pose_x:={args_cli.spawn_x}",
+        f"initial_pose_y:={args_cli.spawn_y}",
+        f"initial_pose_yaw:={args_cli.spawn_yaw}",
     ]
     print(f"[INFO] Starting Nav2 process: {' '.join(nav2_cmd)}")
     log_file_path = "/home/robopi/simulation/nav2_bringup.log"
     log_file = open(log_file_path, "w")
-    nav2_proc = subprocess.Popen(nav2_cmd, stdout=log_file, stderr=subprocess.STDOUT, text=True)
+    nav2_proc = subprocess.Popen(
+        nav2_cmd,
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        text=True,
+        start_new_session=True,
+    )
 
     try:
         # 9. Warmup phase: step simulation to pump /clock and /scan until Nav2 lifecycle manager transitions all nodes to ACTIVE
@@ -198,6 +226,28 @@ def run_nav2_verification():
                 assert False, "Nav2 process crashed during startup."
             else:
                 assert False, f"Nav2 failed to report active status within {max_warmup_steps} simulation steps."
+
+        # Align AMCL localization with simulation spawn pose
+        init_msg = PoseWithCovarianceStamped()
+        init_msg.header.frame_id = "map"
+        init_msg.header.stamp = test_node.get_clock().now().to_msg()
+        init_msg.pose.pose.position.x = float(args_cli.spawn_x)
+        init_msg.pose.pose.position.y = float(args_cli.spawn_y)
+        init_msg.pose.pose.position.z = 0.0
+        init_msg.pose.pose.orientation.z = math.sin(half_spawn_yaw)
+        init_msg.pose.pose.orientation.w = math.cos(half_spawn_yaw)
+        init_msg.pose.covariance[0] = 0.05
+        init_msg.pose.covariance[7] = 0.05
+        init_msg.pose.covariance[35] = 0.05
+        initial_pose_pub.publish(init_msg)
+        print(f"[INFO] Published initial pose to AMCL: ({args_cli.spawn_x:.2f}, {args_cli.spawn_y:.2f}) [yaw={args_cli.spawn_yaw:.2f} rad]")
+
+        # Step simulation to allow AMCL and costmaps to integrate scans before dispatching goal
+        for _ in range(30):
+            actions = action_adapter.get_action()
+            env.step(actions)
+            scan_publisher.publish_from_raycaster(lidar.data.ray_hits_w, lidar.data.pos_w)
+            simulation_app.update()
 
         print("[INFO] Nav2 is active! Dispatching goal to NavigateToPose action server...")
         goal_x, goal_y, goal_heading = env.get_goal_pose_w(0)
@@ -316,11 +366,17 @@ def run_nav2_verification():
     finally:
         print("[INFO] Cleaning up Nav2 process and ROS 2 nodes...")
         if nav2_proc.poll() is None:
-            nav2_proc.terminate()
             try:
+                pgid = os.getpgid(nav2_proc.pid)
+                os.killpg(pgid, signal.SIGTERM)
                 nav2_proc.wait(timeout=5.0)
-            except subprocess.TimeoutExpired:
-                nav2_proc.kill()
+            except (subprocess.TimeoutExpired, ProcessLookupError):
+                try:
+                    os.killpg(pgid, signal.SIGKILL)
+                except Exception:
+                    pass
+            except Exception:
+                nav2_proc.terminate()
         executor.shutdown()
         executor_thread.join(timeout=2.0)
         test_node.destroy_node()

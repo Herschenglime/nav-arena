@@ -12,6 +12,8 @@ import numpy as np
 from PIL import Image
 import yaml
 
+from typing import Callable
+
 from pxr import Sdf, Usd, UsdGeom, UsdPhysics
 import omni.usd
 import omni.timeline
@@ -150,6 +152,7 @@ def generate_occupancy_map(
     z_max: float = DEFAULT_Z_MAX,
     output_dir: str = "nav_arena/cache/maps/default",
     warmup_steps: int = 30,
+    stage_preprocessor: Callable[[Usd.Stage], None] | None = None,
 ) -> str:
     """Generate Nav2-compatible 2D occupancy map (map.png and map.yaml) from stage geometry.
 
@@ -161,6 +164,7 @@ def generate_occupancy_map(
         z_max: Upper bound for Z raycasting slice in meters.
         output_dir: Directory where map.png and map.yaml will be saved.
         warmup_steps: Number of simulation steps before triggering raycast.
+        stage_preprocessor: Optional scene-specific conditioning hook executed on the USD stage.
 
     Returns:
         Path to the generated map.yaml file.
@@ -168,6 +172,11 @@ def generate_occupancy_map(
     stage = omni.usd.get_context().get_stage()
     if stage is None:
         raise RuntimeError("No active USD stage found in current context.")
+
+    # 0. Execute scene-specific stage conditioning hook if provided
+    if stage_preprocessor is not None:
+        print("[INFO] Executing scene-specific stage preprocessor hook...")
+        stage_preprocessor(stage)
 
     # Validate stage units are in meters to prevent scale distortion
     meters_per_unit = UsdGeom.GetStageMetersPerUnit(stage)
@@ -282,6 +291,7 @@ def get_occupancy_map(
     cache_root: str = "nav_arena/cache/maps",
     force_generate: bool = False,
     warmup_steps: int = 30,
+    stage_preprocessor: Callable[[Usd.Stage], None] | None = None,
 ) -> str:
     """Retrieve cached occupancy map for a scene or generate it if not present.
 
@@ -295,6 +305,7 @@ def get_occupancy_map(
         cache_root: Base directory for cached maps.
         force_generate: If True, re-generate map even if cache exists.
         warmup_steps: Number of simulation steps before raycasting.
+        stage_preprocessor: Optional scene-specific conditioning hook executed on the USD stage.
 
     Returns:
         Absolute path to the map.yaml file.
@@ -317,5 +328,6 @@ def get_occupancy_map(
         z_max=z_max,
         output_dir=cache_dir,
         warmup_steps=warmup_steps,
+        stage_preprocessor=stage_preprocessor,
     )
     return os.path.abspath(yaml_path)

@@ -30,6 +30,36 @@ DEFAULT_INTERIOR_AGENT_USD = os.path.join(
     f"{DEFAULT_INTERIOR_AGENT_SCENE_ID}.usda",
 )
 
+INTERIOR_AGENT_DOOR_PREFIX = "other/door_"
+
+
+def prepare_interior_agent_stage(stage, disable_doors: bool = True) -> int:
+    """Condition InteriorAgent USD stages for static navigation benchmarking.
+
+    InteriorAgent scenes model closed door panels under `/Root/Meshes/other/door_XXXX`
+    with collision bodies. For navigation benchmarks without dynamic manipulation,
+    deactivating these prims opens all doorways seamlessly for both raycast mapping
+    and runtime PhysX + 2D LiDAR.
+
+    Args:
+        stage: pxr.Usd.Stage instance to condition.
+        disable_doors: If True, deactivates door prims so doorways remain open.
+
+    Returns:
+        Number of door prims deactivated.
+    """
+    if not disable_doors:
+        return 0
+
+    count = 0
+    for prim in stage.Traverse():
+        path_str = prim.GetPath().pathString
+        if INTERIOR_AGENT_DOOR_PREFIX in path_str and prim.GetName().startswith("door_"):
+            if prim.IsActive():
+                prim.SetActive(False)
+                count += 1
+    return count
+
 
 def resolve_interior_agent_usd(
     scene_id_or_path: str = DEFAULT_INTERIOR_AGENT_SCENE_ID,

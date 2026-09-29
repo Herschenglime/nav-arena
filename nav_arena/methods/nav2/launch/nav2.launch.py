@@ -16,6 +16,7 @@ from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.substitutions import FindPackageShare
+from nav2_common.launch import RewrittenYaml
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -78,6 +79,47 @@ def generate_launch_description() -> LaunchDescription:
         description="Whether to start RViz",
     )
 
+    # Initial pose configuration for AMCL
+    initial_pose_x = LaunchConfiguration("initial_pose_x")
+    initial_pose_y = LaunchConfiguration("initial_pose_y")
+    initial_pose_z = LaunchConfiguration("initial_pose_z")
+    initial_pose_yaw = LaunchConfiguration("initial_pose_yaw")
+
+    declare_initial_pose_x_cmd = DeclareLaunchArgument(
+        "initial_pose_x",
+        default_value="0.0",
+        description="Initial pose X coordinate for AMCL",
+    )
+    declare_initial_pose_y_cmd = DeclareLaunchArgument(
+        "initial_pose_y",
+        default_value="0.0",
+        description="Initial pose Y coordinate for AMCL",
+    )
+    declare_initial_pose_z_cmd = DeclareLaunchArgument(
+        "initial_pose_z",
+        default_value="0.0",
+        description="Initial pose Z coordinate for AMCL",
+    )
+    declare_initial_pose_yaw_cmd = DeclareLaunchArgument(
+        "initial_pose_yaw",
+        default_value="0.0",
+        description="Initial pose Yaw orientation for AMCL",
+    )
+
+    param_substitutions = {
+        "amcl.ros__parameters.initial_pose.x": initial_pose_x,
+        "amcl.ros__parameters.initial_pose.y": initial_pose_y,
+        "amcl.ros__parameters.initial_pose.z": initial_pose_z,
+        "amcl.ros__parameters.initial_pose.yaw": initial_pose_yaw,
+        "amcl.ros__parameters.set_initial_pose": "true",
+    }
+
+    configured_params = RewrittenYaml(
+        source_file=params_file,
+        param_rewrites=param_substitutions,
+        convert_types=True,
+    )
+
     # 1. Robot description and static TF (Goal 2)
     robot_description_cmd = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(robot_desc_launch_file),
@@ -93,7 +135,7 @@ def generate_launch_description() -> LaunchDescription:
         launch_arguments={
             "map": map_yaml_file,
             "use_sim_time": use_sim_time,
-            "params_file": params_file,
+            "params_file": configured_params,
             "autostart": autostart,
         }.items(),
     )
@@ -132,6 +174,10 @@ def generate_launch_description() -> LaunchDescription:
     ld.add_action(declare_autostart_cmd)
     ld.add_action(declare_use_rviz_cmd)
     ld.add_action(declare_rviz_config_cmd)
+    ld.add_action(declare_initial_pose_x_cmd)
+    ld.add_action(declare_initial_pose_y_cmd)
+    ld.add_action(declare_initial_pose_z_cmd)
+    ld.add_action(declare_initial_pose_yaw_cmd)
 
     ld.add_action(robot_description_cmd)
     ld.add_action(nav2_bringup_cmd)
