@@ -97,7 +97,8 @@ class LaserScanPublisherNode(Node):
         dists_clamped = dists.clone()
         dists_clamped[invalid_mask] = float("inf")
 
-        ranges_list = dists_clamped.cpu().tolist()
+        # Zero-copy numpy conversion across Grace-Blackwell unified memory
+        ranges_list = dists_clamped.cpu().numpy().tolist()
 
         msg = LaserScan()
         if stamp_time is not None:

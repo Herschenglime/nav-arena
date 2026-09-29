@@ -21,6 +21,7 @@ def create_2d_lidar_cfg(
     horizontal_res_deg: float = 1.0,
     max_range: float = 25.0,
     use_multi_mesh: bool = False,
+    update_period: float = 0.05,
 ) -> RayCasterCfg:
     """Create a 2D planar LiDAR sensor configuration.
 
@@ -32,6 +33,7 @@ def create_2d_lidar_cfg(
         horizontal_res_deg: Angular resolution per ray beam in degrees.
         max_range: Maximum ray distance.
         use_multi_mesh: Whether to use MultiMeshRayCaster for scenes with multiple meshes.
+        update_period: Update period in seconds. Defaults to 0.05s (20 Hz) to match physical LiDARs and reduce Warp compute.
 
     Returns:
         Configured RayCasterCfg or MultiMeshRayCasterCfg instance.
@@ -60,6 +62,7 @@ def create_2d_lidar_cfg(
             ray_alignment="base",
             pattern_cfg=pattern_cfg,
             max_distance=max_range,
+            update_period=update_period,
             debug_vis=False,
         )
 
@@ -73,6 +76,7 @@ def create_2d_lidar_cfg(
         ray_alignment="base",
         pattern_cfg=pattern_cfg,
         max_distance=max_range,
+        update_period=update_period,
         debug_vis=False,
     )
 

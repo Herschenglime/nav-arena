@@ -177,7 +177,8 @@ class PointNavEnvCfg(ManagerBasedRLEnvCfg):
         self.decimation = 2
         self.episode_length_s = 60.0
         self.sim.dt = 0.01
-        self.sim.render_interval = self.decimation
+        # Set to 3 for ~33.3 FPS smooth viewport interaction while remaining 3x lighter than baseline
+        self.sim.render_interval = 3
 
 
 def create_point_nav_env_cfg(

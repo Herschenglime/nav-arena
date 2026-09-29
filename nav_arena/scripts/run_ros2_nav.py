@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import math
 import sys
+import time
 import rclpy
 
 from isaaclab.app import AppLauncher
@@ -120,6 +121,7 @@ def main():
 
     # 7. Main execution loop
     step_count = 0
+    start_wall_time = time.time()
     try:
         while simulation_app.is_running():
             # Process incoming ROS 2 messages
@@ -130,8 +132,9 @@ def main():
             actions = action_adapter.get_action()
             obs, rewards, dones, timeouts, infos = env.step(actions)
 
-            # Advance Omniverse Kit / OmniGraph execution
-            simulation_app.update()
+            # In headless mode, step OmniGraph only when not rendered by env.step()
+            if args_cli.headless and (step_count % env_cfg.sim.render_interval == 0):
+                simulation_app.update()
 
             if dones.any():
                 is_goal = env.is_goal_reached(0)
@@ -147,11 +150,20 @@ def main():
 
             step_count += 1
             if args_cli.num_steps > 0 and step_count >= args_cli.num_steps:
+                elapsed_wall = time.time() - start_wall_time
+                sim_time = step_count * env.step_dt
+                rtf = sim_time / elapsed_wall if elapsed_wall > 0 else 0.0
+                fps = step_count / elapsed_wall if elapsed_wall > 0 else 0.0
                 print(f"[INFO] Completed requested {args_cli.num_steps} simulation steps.")
+                print(f"[INFO] Performance: {step_count} steps in {elapsed_wall:.2f}s | Rate: {fps:.1f} steps/s | RTF: {rtf:.2f}x")
                 break
 
     except KeyboardInterrupt:
         print("\n[INFO] KeyboardInterrupt received. Shutting down gracefully...")
+    except Exception as e:
+        print(f"\n[ERROR] Exception in simulation loop: {e}")
+        import traceback
+        traceback.print_exc()
 
     finally:
         print("[INFO] Cleaning up ROS 2 and simulation resources...")
