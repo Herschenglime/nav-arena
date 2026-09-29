@@ -44,7 +44,7 @@ from isaaclab.utils.configclass import configclass
 
 from nav_arena.embodiments.nova_carter import NovaCarterEmbodimentCfg
 from nav_arena.maps import generate_occupancy_map, get_occupancy_map
-from nav_arena.scenes.interior_agent import prepare_interior_agent_stage, resolve_interior_agent_usd
+from nav_arena.scenes.interior_agent import get_open_door_usd, prepare_interior_agent_stage, resolve_interior_agent_usd
 
 
 @configclass
@@ -66,9 +66,10 @@ def verify_occupancy_map():
     print(f"[INFO] STARTING OCCUPANCY MAP VERIFICATION FOR SCENE: '{args_cli.scene}'")
     print("=" * 70)
 
-    # 1. Resolve USD path
-    usd_path = resolve_interior_agent_usd(args_cli.scene)
+    # 1. Resolve USD path with open doors delta layer
+    usd_path = get_open_door_usd(args_cli.scene)
     print(f"[INFO] Resolved USD path: {usd_path}")
+
 
     # 2. Derive z-bounds from Nova Carter embodiment sensor height
     embodiment = NovaCarterEmbodimentCfg()

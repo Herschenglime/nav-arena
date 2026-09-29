@@ -190,6 +190,7 @@ def create_point_nav_env_cfg(
     collision_threshold: float = 1.0,
     episode_length_s: float = 60.0,
     num_envs: int = 1,
+    open_doors: bool = True,
 ) -> PointNavEnvCfg:
     """Factory helper to create a fully customized PointNavEnvCfg.
 
@@ -203,6 +204,7 @@ def create_point_nav_env_cfg(
         collision_threshold: Net contact force in Newtons considered a collision.
         episode_length_s: Episode duration timeout in seconds.
         num_envs: Number of parallel environments.
+        open_doors: If True, uses the open-door delta layer to allow free passage.
 
     Returns:
         Configured PointNavEnvCfg.
@@ -216,10 +218,12 @@ def create_point_nav_env_cfg(
         robot_spawn_pos=robot_spawn_pos,
         robot_spawn_rot=robot_spawn_rot,
         num_envs=num_envs,
+        open_doors=open_doors,
     )
     env_cfg.scene.scene_asset = base_scene.scene_asset
     env_cfg.scene.robot = base_scene.robot
     env_cfg.scene.lidar = base_scene.lidar
+
 
     # Configure hardcoded fixed goal command
     env_cfg.commands.pose_2d_command.ranges.pos_x = (goal_pos[0], goal_pos[0])

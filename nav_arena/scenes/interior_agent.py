@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import Sequence
+from typing import Callable, Sequence
 
 import isaaclab.sim as sim_utils
 from isaaclab.assets import AssetBaseCfg
@@ -29,8 +29,10 @@ DEFAULT_INTERIOR_AGENT_USD = os.path.join(
     DEFAULT_INTERIOR_AGENT_SCENE_ID,
     f"{DEFAULT_INTERIOR_AGENT_SCENE_ID}.usda",
 )
+DEFAULT_INTERIOR_AGENT_CACHE_DIR = "/home/robopi/simulation/nav_arena/cache/scenes"
 
 INTERIOR_AGENT_DOOR_PREFIX = "other/door_"
+
 
 
 def prepare_interior_agent_stage(stage, disable_doors: bool = True) -> int:
@@ -96,7 +98,97 @@ def resolve_interior_agent_usd(
     )
 
 
+def get_preprocessed_usd(
+    scene_id_or_path: str = DEFAULT_INTERIOR_AGENT_SCENE_ID,
+    preprocessor: Callable | None = None,
+    variant_name: str = "open_doors",
+    base_dir: str = DEFAULT_INTERIOR_AGENT_DIR,
+    cache_dir: str = DEFAULT_INTERIOR_AGENT_CACHE_DIR,
+    force_regenerate: bool = False,
+) -> str:
+    """Generate or retrieve a cached USD delta layer conditioned by a preprocessor function.
+
+    Sublayers the original source scene USD into a lightweight delta layer, applies
+    the preprocessor callback to modify prim attributes/states (e.g. deactivating doors),
+    and saves the result to a cache directory.
+
+    Args:
+        scene_id_or_path: Scene directory name or full path to USDA/USD file.
+        preprocessor: Callable taking a Usd.Stage to perform non-destructive conditioning.
+        variant_name: Descriptive name for the conditioned variant (e.g. 'open_doors').
+        base_dir: Base directory containing raw scene datasets.
+        cache_dir: Directory where cached delta USD files are stored.
+        force_regenerate: If True, regenerates the delta layer even if cached file exists.
+
+    Returns:
+        Absolute path to the conditioned USD delta layer file.
+    """
+    raw_usd = resolve_interior_agent_usd(scene_id_or_path, base_dir)
+    scene_id = os.path.basename(os.path.dirname(raw_usd))
+    if not scene_id or scene_id == ".":
+        scene_id = os.path.splitext(os.path.basename(raw_usd))[0]
+
+    if preprocessor is None:
+        return raw_usd
+
+    out_dir = os.path.join(cache_dir, scene_id)
+    os.makedirs(out_dir, exist_ok=True)
+    delta_usd_path = os.path.join(out_dir, f"{scene_id}_{variant_name}.usda")
+
+    if os.path.isfile(delta_usd_path) and not force_regenerate:
+        return delta_usd_path
+
+    # Lazy import to ensure Omniverse / Isaac Sim USD runtime is initialized
+    from pxr import Usd
+
+    if os.path.exists(delta_usd_path):
+        os.remove(delta_usd_path)
+
+    stage = Usd.Stage.CreateNew(delta_usd_path)
+    stage.GetRootLayer().subLayerPaths.append(raw_usd)
+
+    # Set defaultPrim to match /Root from source scene
+    root_prim = stage.GetPrimAtPath("/Root")
+    if root_prim.IsValid():
+        stage.SetDefaultPrim(root_prim)
+    else:
+        src_stage = Usd.Stage.Open(raw_usd)
+        src_def = src_stage.GetDefaultPrim()
+        if src_def.IsValid() and stage.GetPrimAtPath(src_def.GetPath()).IsValid():
+            stage.SetDefaultPrim(stage.GetPrimAtPath(src_def.GetPath()))
+
+    preprocessor(stage)
+    stage.GetRootLayer().Save()
+    print(f"[INFO] Created cached USD delta layer: '{delta_usd_path}'")
+    return delta_usd_path
+
+
+def get_open_door_usd(
+    scene_id_or_path: str = DEFAULT_INTERIOR_AGENT_SCENE_ID,
+    base_dir: str = DEFAULT_INTERIOR_AGENT_DIR,
+    force_regenerate: bool = False,
+) -> str:
+    """Resolve an InteriorAgent scene USD with all interior doors deactivated via a delta layer.
+
+    Args:
+        scene_id_or_path: Scene identifier or path.
+        base_dir: Base directory containing InteriorAgent scenes.
+        force_regenerate: If True, re-creates the delta layer.
+
+    Returns:
+        Path to the open-doors delta USD file.
+    """
+    return get_preprocessed_usd(
+        scene_id_or_path=scene_id_or_path,
+        preprocessor=prepare_interior_agent_stage,
+        variant_name="open_doors",
+        base_dir=base_dir,
+        force_regenerate=force_regenerate,
+    )
+
+
 @configclass
+
 class InteriorAgentSceneCfg(InteractiveSceneCfg):
     """Configuration for an InteriorAgent interactive environment scene."""
 
@@ -140,6 +232,7 @@ def create_interior_agent_scene_cfg(
     robot_spawn_rot: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0),
     num_envs: int = 1,
     env_spacing: float = 30.0,
+    open_doors: bool = True,
 ) -> InteriorAgentSceneCfg:
     """Create a configured InteriorAgentSceneCfg instance.
 
@@ -150,11 +243,15 @@ def create_interior_agent_scene_cfg(
         robot_spawn_rot: (x, y, z, w) initial quaternion orientation of the robot.
         num_envs: Number of parallel environments.
         env_spacing: Distance between environment origins in meters.
+        open_doors: If True, uses the open-door delta layer to allow free passage for PhysX and LiDAR.
 
     Returns:
         Configured InteriorAgentSceneCfg.
     """
-    usd_path = resolve_interior_agent_usd(scene_id_or_path, base_dir)
+    if open_doors:
+        usd_path = get_open_door_usd(scene_id_or_path, base_dir)
+    else:
+        usd_path = resolve_interior_agent_usd(scene_id_or_path, base_dir)
 
     cfg = InteriorAgentSceneCfg(num_envs=num_envs, env_spacing=env_spacing)
     cfg.scene_asset = cfg.scene_asset.replace(
@@ -170,3 +267,4 @@ def create_interior_agent_scene_cfg(
         )
     )
     return cfg
+

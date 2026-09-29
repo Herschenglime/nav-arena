@@ -62,8 +62,8 @@ from rosgraph_msgs.msg import Clock
 import omni.usd
 from nav_arena.ros2 import LaserScanPublisherNode, TaskStatePublisherNode, build_ros2_omnigraph
 from nav_arena.ros2.adapters.action_adapter import TwistActionAdapter
-from nav_arena.scenes import prepare_interior_agent_stage
 from nav_arena.tasks import PointNavTask, create_point_nav_env_cfg
+
 
 
 def run_nav2_verification():
@@ -96,13 +96,8 @@ def run_nav2_verification():
     print("[INFO] Instantiating PointNavTask environment...")
     env = PointNavTask(cfg=env_cfg)
 
-    # Deactivate interior door prims so robot and LiDAR can navigate freely
-    stage = omni.usd.get_context().get_stage()
-    deactivated_doors = prepare_interior_agent_stage(stage)
-    if deactivated_doors > 0:
-        print(f"[INFO] Deactivated {deactivated_doors} door prims on live simulation stage.")
-
     # Position viewport camera to frame the robot and path
+
     env.sim.set_camera_view(eye=[-1.75, -2.8, 2.5], target=[-1.75, 0.0, 0.3])
 
     # 5. Build OmniGraph ROS 2 bridge for Clock, TF, and Odometry

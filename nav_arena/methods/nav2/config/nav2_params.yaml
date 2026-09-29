@@ -186,7 +186,7 @@ local_costmap:
   local_costmap:
     ros__parameters:
       use_sim_time: True
-      footprint_padding: 0.03
+      footprint_padding: 0.01
       update_frequency: 5.0
       publish_frequency: 2.0
       global_frame: odom
@@ -214,14 +214,14 @@ local_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         enabled: True
-        cost_scaling_factor: 3.0
-        inflation_radius: 0.55
+        cost_scaling_factor: 4.0
+        inflation_radius: 0.35
 
 global_costmap:
   global_costmap:
     ros__parameters:
       use_sim_time: True
-      footprint_padding: 0.05
+      footprint_padding: 0.01
       update_frequency: 1.0
       publish_frequency: 1.0
       global_frame: map
@@ -246,8 +246,8 @@ global_costmap:
           obstacle_max_range: 20.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 1.5
-        inflation_radius: 0.55
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.35
       always_send_full_costmap: True
 
 map_server:
