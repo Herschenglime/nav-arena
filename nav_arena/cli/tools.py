@@ -150,7 +150,7 @@ def handle_map_show(args: argparse.Namespace) -> int:
     try:
         with yaml_file.open("r", encoding="utf-8") as f:
             meta = yaml.safe_load(f) or {}
-    except Exception as exc:
+    except (OSError, yaml.YAMLError) as exc:
         logger.error("Failed to read map config %s: %s", yaml_file, exc)
         return 1
 
@@ -175,7 +175,7 @@ def handle_map_show(args: argparse.Namespace) -> int:
                 w_m = img.width * res
                 h_m = img.height * res
                 print(f"Dimensions:       {img.width} x {img.height} pixels ({w_m:.2f} m x {h_m:.2f} m)")
-        except Exception as exc:
+        except (ImportError, OSError, ValueError) as exc:
             logger.debug("Failed opening map image: %s", exc)
 
     return 0

@@ -456,5 +456,5 @@ class BatchManifest:
             return cls.from_json(content)
         except json.JSONDecodeError as exc:
             raise ValueError(f"Corrupt manifest JSON file '{p}': {exc}") from exc
-        except Exception as exc:
+        except (OSError, KeyError, TypeError, ValueError) as exc:
             raise ValueError(f"Failed to load manifest from '{p}': {exc}") from exc

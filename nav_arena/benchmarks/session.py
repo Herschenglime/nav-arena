@@ -25,6 +25,9 @@ from nav_arena.utils import RUNS_DIR, get_logger
 
 logger = get_logger("benchmarks.session")
 
+_STEP_DT = 0.02
+"""Seconds per control step (physics dt 0.01 x decimation 2)."""
+
 
 @dataclass
 class SessionKey:
@@ -201,11 +204,85 @@ class RunSession:
         self.overlay: Any | None = None
         self.is_open: bool = False
 
+    def _boot_app(self) -> None:
+        """Start AppLauncher / SimulationApp unless the caller supplied a running app."""
+        if self._sim_app is not None:
+            return
+        args = copy.deepcopy(self.args_cli) if self.args_cli is not None else argparse.Namespace()
+        args.enable_cameras = True
+        args.visualizer = ["kit"] if self.key.viz.gui else None
+        args.headless = not self.key.viz.gui
+        enable_ros2 = self.method_family == "ros2"
+        self._app_cm = launch_simulation_app(args, enable_ros2=enable_ros2, livestream=True)
+        self._sim_app = self._app_cm.__enter__()
+
+    def _build_task(self, ep: EpisodeSpec, follow: bool) -> None:
+        """Construct the PointNav task for this episode's spawn, goal and limits."""
+        from nav_arena.tasks import PointNavTask, create_point_nav_env_cfg
+
+        spawn_xy, goal_xy = ep.spawn, ep.goal
+        spawn_yaw = (
+            ep.spawn_yaw if ep.spawn_yaw is not None else math.atan2(goal_xy[1] - spawn_xy[1], goal_xy[0] - spawn_xy[0])
+        )
+        route_name = ep.route or "custom"
+        logger.section(f"BASELINE '{self.key.method}' ON '{self.key.robot}': {self.key.scene}/{route_name}")
+        logger.info(f"Spawn {spawn_xy} (yaw {math.degrees(spawn_yaw):.0f} deg) -> goal {goal_xy}")
+
+        task_param = self.key.method_params.get("task")
+        enable_goal_camera = task_param == "imagegoal" or (task_param is None and self.key.method == "vint")
+        show_goal_marker = self.key.viz.show_goal_marker
+        if show_goal_marker:
+            logger.warning("Goal marker enabled: policies' cameras will see it as an obstacle at the goal.")
+
+        env_cfg = create_point_nav_env_cfg(
+            scene_id_or_path=self.key.scene,
+            robot_spawn_pos=(spawn_xy[0], spawn_xy[1], 0.25),
+            robot_spawn_rot=(0.0, 0.0, math.sin(spawn_yaw / 2.0), math.cos(spawn_yaw / 2.0)),
+            goal_pos=goal_xy,
+            goal_threshold=ep.limits.goal_tolerance,
+            episode_length_s=ep.limits.max_steps * _STEP_DT + 10.0,
+            robot_name=self.key.robot,
+            enable_camera=True,
+            enable_goal_camera=enable_goal_camera,
+            show_goal_marker=show_goal_marker,
+            scene_queries=follow,
+        )
+        self.task = PointNavTask(cfg=env_cfg, render_mode=self.render_mode)
+
+    def _build_viewer(self, ep: EpisodeSpec, gui: bool, follow: bool) -> None:
+        """Create the follow camera, or aim the default viewport camera at the start (GUI only)."""
+        self.viewer = None
+        if follow:
+            from nav_arena.utils.viewer import ThirdPersonView
+
+            self.viewer = ThirdPersonView(distance=self.key.viz.follow_distance, height=self.key.viz.follow_height)
+            logger.info("Third-person follow camera enabled")
+        elif gui:
+            spawn_x, spawn_y = ep.spawn
+            self.task.sim.set_camera_view(
+                eye=[spawn_x - 2.0, spawn_y - 2.5, 2.2], target=[spawn_x + 1.0, spawn_y, 0.4]
+            )
+
+    def _build_policy(self, ep: EpisodeSpec) -> None:
+        """Load the navigation policy; its config is the method params plus the device and seed."""
+        from nav_arena.methods.in_process import get_policy
+
+        cfg_kwargs: dict[str, Any] = {"device": str(self.task.device), "seed": ep.seed}
+        cfg_kwargs.update(self.key.method_params)  # policy config fields only (task, plan_hz, device, ...)
+        logger.info(f"Loading policy '{self.key.method}' ({cfg_kwargs})...")
+        self.policy = get_policy(self.key.method, self.task.get_camera_intrinsics(), **cfg_kwargs)
+
+    def _build_overlay(self, ep: EpisodeSpec) -> None:
+        """Create the viewport goal/plan overlay, a UI layer that the policy's cameras cannot see."""
+        from nav_arena.utils.viewer import DebugOverlay
+
+        self.overlay = DebugOverlay(ep.goal, tolerance=ep.limits.goal_tolerance)
+        logger.info("Viewport goal/plan overlay requested (UI layer; not rendered into the policy's cameras)")
+
     def start(self, episode_spec: EpisodeSpec | None = None) -> RunSession:
         """Boot simulator, construct PointNavTask, viewer, overlay, and load policy."""
         if self.is_open:
             return self
-
         if self.key.method == "nav2":
             raise NotImplementedError("Nav2 backend is reserved and not yet implemented.")
 
@@ -214,101 +291,22 @@ class RunSession:
             raise ValueError("RunSession requires an EpisodeSpec to initialize environment.")
         self.initial_episode = ep
 
-        # 1. Boot AppLauncher / SimulationApp if not already active
-        if self._sim_app is None:
-            args = copy.deepcopy(self.args_cli) if self.args_cli is not None else argparse.Namespace()
-            setattr(args, "enable_cameras", True)
-            if self.key.viz.gui:
-                setattr(args, "visualizer", ["kit"])
-                setattr(args, "headless", False)
-            else:
-                setattr(args, "visualizer", None)
-                setattr(args, "headless", True)
-
-            enable_ros2 = self.method_family == "ros2"
-            self._app_cm = launch_simulation_app(args, enable_ros2=enable_ros2, livestream=True)
-            self._sim_app = self._app_cm.__enter__()
-
+        self._boot_app()
         try:
-            # 2. Deferred imports: MUST occur only after SimulationApp boots
-            from nav_arena.methods.in_process import get_policy
-            from nav_arena.tasks import PointNavTask, create_point_nav_env_cfg
-
-            spawn_xy = ep.spawn
-            goal_xy = ep.goal
-            spawn_yaw = (
-                ep.spawn_yaw
-                if ep.spawn_yaw is not None
-                else math.atan2(goal_xy[1] - spawn_xy[1], goal_xy[0] - spawn_xy[0])
-            )
-            spawn_quat = (0.0, 0.0, math.sin(spawn_yaw / 2.0), math.cos(spawn_yaw / 2.0))
-
-            route_name = ep.route or "custom"
-            logger.section(f"BASELINE '{self.key.method}' ON '{self.key.robot}': {self.key.scene}/{route_name}")
-            logger.info(f"Spawn {spawn_xy} (yaw {math.degrees(spawn_yaw):.0f} deg) -> goal {goal_xy}")
-
+            # Everything below imports Isaac Lab modules, which must only happen after the app boots.
             viz = self.key.viz.resolved()
-            gui, follow, overlay_enabled = viz.gui, viz.follow_camera, viz.goal_overlay
-
-            limits = ep.limits
-            step_dt = 0.02
-            task_param = self.key.method_params.get("task", None)
-            enable_goal_camera = task_param == "imagegoal" or (task_param is None and self.key.method == "vint")
-            show_goal_marker = self.key.viz.show_goal_marker
-            if show_goal_marker:
-                logger.warning("Goal marker enabled: policies' cameras will see it as an obstacle at the goal.")
-
-            env_cfg = create_point_nav_env_cfg(
-                scene_id_or_path=self.key.scene,
-                robot_spawn_pos=(spawn_xy[0], spawn_xy[1], 0.25),
-                robot_spawn_rot=spawn_quat,
-                goal_pos=goal_xy,
-                goal_threshold=limits.goal_tolerance,
-                episode_length_s=limits.max_steps * step_dt + 10.0,
-                robot_name=self.key.robot,
-                enable_camera=True,
-                enable_goal_camera=enable_goal_camera,
-                show_goal_marker=show_goal_marker,
-                scene_queries=follow,
-            )
-
-            self.task = PointNavTask(cfg=env_cfg, render_mode=self.render_mode)
-
-            # 3. Third-person view or viewport camera
-            self.viewer = None
-            if follow:
-                from nav_arena.utils.viewer import ThirdPersonView
-
-                self.viewer = ThirdPersonView(distance=self.key.viz.follow_distance, height=self.key.viz.follow_height)
-                logger.info("Third-person follow camera enabled")
-            elif gui:
-                self.task.sim.set_camera_view(
-                    eye=[spawn_xy[0] - 2.0, spawn_xy[1] - 2.5, 2.2],
-                    target=[spawn_xy[0] + 1.0, spawn_xy[1], 0.4],
-                )
-
+            self._build_task(ep, follow=viz.follow_camera)
+            self._build_viewer(ep, gui=viz.gui, follow=viz.follow_camera)
             self.task.reset()
-            for _ in range(4):
+            for _ in range(4):  # RTX output needs a few frames before intrinsics/frames are valid
                 self.task.sim.render()
-
-            # 4. Construct policy
-            cfg_kwargs: dict[str, Any] = {"device": str(self.task.device), "seed": ep.seed}
-            cfg_kwargs.update(self.key.method_params)  # policy config fields only (task, plan_hz, device, ...)
-
-            logger.info(f"Loading policy '{self.key.method}' ({cfg_kwargs})...")
-            self.policy = get_policy(self.key.method, self.task.get_camera_intrinsics(), **cfg_kwargs)
-
-            # 5. Goal/plan debug overlay
+            self._build_policy(ep)
             self.overlay = None
-            if overlay_enabled:
-                from nav_arena.utils.viewer import DebugOverlay
-
-                self.overlay = DebugOverlay(goal_xy, tolerance=limits.goal_tolerance)
-                logger.info("Viewport goal/plan overlay requested (UI layer; not rendered into the policy's cameras)")
-
+            if viz.goal_overlay:
+                self._build_overlay(ep)
             self.is_open = True
             return self
-        except BaseException:
+        except BaseException:  # clean up the half-started session (app, env) for any failure, then re-raise
             self.close(*sys.exc_info())
             raise
 
@@ -361,7 +359,7 @@ class RunSession:
         if self.task is not None:
             try:
                 self.task.close()
-            except Exception as exc:
+            except Exception as exc:  # teardown boundary: a failing env close must not mask the original error
                 logger.warning(f"Error closing PointNavTask: {exc}")
             self.task = None
 

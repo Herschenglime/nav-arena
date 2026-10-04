@@ -45,7 +45,7 @@ def load_run_spec(spec_input: str) -> RunSpec:
 
     try:
         spec = RunSpec.from_json(content)
-    except Exception as exc:
+    except (KeyError, TypeError, ValueError) as exc:
         raise ValueError(f"Failed to deserialize RunSpec JSON: {exc}") from exc
 
     validate_spec(spec)
@@ -71,7 +71,7 @@ def main(argv: list[str] | None = None) -> None:
 
     try:
         spec = load_run_spec(args.spec)
-    except Exception as exc:
+    except ValueError as exc:
         logger.error(f"Spec parsing error: {exc}", exc_info=True)
         sys.exit(1)
 
@@ -86,7 +86,7 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(1)
     except SystemExit:
         raise
-    except BaseException as exc:
+    except BaseException as exc:  # process boundary: any failure must become exit code 1 with a logged traceback
         logger.error(f"Worker failure: {exc}", exc_info=True)
         sys.exit(1)
 

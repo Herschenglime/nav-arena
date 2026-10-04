@@ -70,7 +70,7 @@ def get_git_info(repo_path: Path | str) -> dict[str, Any]:
             check=True,
         )
         commit = res_sha.stdout.strip()
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         commit = None
 
     try:
@@ -82,7 +82,7 @@ def get_git_info(repo_path: Path | str) -> dict[str, Any]:
             check=True,
         )
         dirty = bool(res_status.stdout.strip())
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         dirty = False
 
     return {"commit": commit, "dirty": dirty}
@@ -571,7 +571,7 @@ def _update_batch_yaml(batch_dir: Path, **kwargs: Any) -> None:
         data = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
         data.update(kwargs)
         yaml_path.write_text(yaml.dump(data, sort_keys=False), encoding="utf-8")
-    except Exception as exc:
+    except (OSError, AttributeError, yaml.YAMLError) as exc:
         logger.debug("Failed to update batch.yaml: %s", exc)
 
 
