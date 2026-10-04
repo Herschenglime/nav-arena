@@ -5,6 +5,12 @@
 
 """Benchmarks package for nav_arena runs, sweeps, and tracking."""
 
+from nav_arena.benchmarks.manifest import (
+    VALID_RUN_STATUSES,
+    BatchManifest,
+    RunRecord,
+    RunStatus,
+)
 from nav_arena.benchmarks.spec import (
     VALID_METHODS,
     VALID_METHOD_FAMILIES,
@@ -23,13 +29,17 @@ _SESSION_EXPORTS = {
 }
 
 __all__ = [
+    "BatchManifest",
     "EpisodeLimits",
     "EpisodeSpec",
+    "RunRecord",
     "RunSession",
     "RunSpec",
+    "RunStatus",
     "SessionKey",
     "VALID_METHODS",
     "VALID_METHOD_FAMILIES",
+    "VALID_RUN_STATUSES",
     "VizCfg",
     "apply_overrides",
     "print_result_summary",
