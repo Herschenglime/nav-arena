@@ -9,19 +9,20 @@ from __future__ import annotations
 
 import argparse
 import csv
-import json
 from pathlib import Path
+from typing import Any
 
 import yaml
 
+from nav_arena.benchmarks.io import load_json
 from nav_arena.benchmarks.manifest import BatchManifest, RunStatus, _utcnow_iso
 from nav_arena.benchmarks.results import append_results_row
-from nav_arena.benchmarks.sweep import check_preflight_processes
 from nav_arena.benchmarks.tracking import compare_batch, find_run_spec_for_rerun, list_runs, show_run
-from nav_arena.cli.run import execute_single_run_process
+from nav_arena.cli.run import execute_single_run_process, refuse_if_simulator_busy
 from nav_arena.cli._common import print_subcommand_help
 from nav_arena.utils.logger import get_logger
 from nav_arena.utils.paths import RUNS_DIR
+from nav_arena.utils.run_dir import clear_recorded_artifacts
 
 logger = get_logger("nav_arena.cli")
 
@@ -85,6 +86,64 @@ def handle_runs_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def _fmt(value: Any, template: str) -> str:
+    return template.format(value) if value is not None else "-"
+
+
+def _print_batch(data: dict[str, Any]) -> None:
+    print(f"Batch: {data.get('batch_id')}")
+    print(f"Directory: {data.get('batch_dir')}")
+    print(f"Status: {data.get('status')}")
+    print(f"Success Rate: {data.get('success_rate', 0.0):.1f}%")
+    progress = data.get("progress", {})
+    print("Progress:")
+    for label, key in (
+        ("Total", "total"),
+        ("Done", "done"),
+        ("Running", "running"),
+        ("Queued", "queued"),
+        ("Failed", "failed"),
+        ("Timeout", "timeout"),
+        ("Skipped", "skipped"),
+    ):
+        print(f"  {label + ':':<9}{progress.get(key, 0)}")
+    duration = data.get("duration", {})
+    print("Duration:")
+    print(f"  Started:  {duration.get('started_at') or '-'}")
+    print(f"  Ended:    {duration.get('ended_at') or '-'}")
+    print(f"  Duration: {_fmt(duration.get('duration_s'), '{:.1f}s')}")
+    spec = data.get("spec", {})
+    if spec:
+        print("Spec Summary:")
+        for key, value in spec.items():
+            print(f"  {key}: {value}")
+
+
+def _print_run(data: dict[str, Any]) -> None:
+    print(f"Run: {data.get('run_id')}")
+    print(f"Directory: {data.get('run_dir')}")
+    print(f"Status: {data.get('status')}")
+    outcome = data.get("outcome", {})
+    print("Outcome:")
+    print(f"  Success:        {outcome.get('success')}")
+    print(f"  Terminal Cause: {outcome.get('terminal_cause') or '-'}")
+    print(f"  Exit Code:      {_fmt(outcome.get('exit_code'), '{}')}")
+    metrics = data.get("metrics", {})
+    print("Metrics:")
+    print(f"  Time to Goal:     {_fmt(metrics.get('time_to_goal_s'), '{:.2f} s')}")
+    print(f"  Path Length:      {_fmt(metrics.get('path_length_m'), '{:.2f} m')}")
+    print(f"  Mean Inference:   {_fmt(metrics.get('mean_inference_ms'), '{:.1f} ms')}")
+    print(f"  Steps:            {_fmt(metrics.get('steps'), '{}')}")
+    print(f"  Final Goal Dist:  {_fmt(metrics.get('final_goal_distance_m'), '{:.2f} m')}")
+    settings = data.get("settings", {})
+    if settings:
+        print("Settings:")
+        for key in ("method", "robot", "scene", "route", "seed"):
+            if key in settings:
+                print(f"  {key}: {settings[key]}")
+    print(f"Log: {data.get('log_path') or '-'}")
+
+
 def handle_runs_show(args: argparse.Namespace) -> int:
     """Handle 'runs show' subcommand."""
     try:
@@ -92,61 +151,7 @@ def handle_runs_show(args: argparse.Namespace) -> int:
     except FileNotFoundError as exc:
         logger.error("%s", exc)
         return 1
-
-    if data.get("type") == "batch":
-        print(f"Batch: {data.get('batch_id')}")
-        print(f"Directory: {data.get('batch_dir')}")
-        print(f"Status: {data.get('status')}")
-        print(f"Success Rate: {data.get('success_rate', 0.0):.1f}%")
-        progress = data.get("progress", {})
-        print("Progress:")
-        print(f"  Total:   {progress.get('total', 0)}")
-        print(f"  Done:    {progress.get('done', 0)}")
-        print(f"  Running: {progress.get('running', 0)}")
-        print(f"  Queued:  {progress.get('queued', 0)}")
-        print(f"  Failed:  {progress.get('failed', 0)}")
-        print(f"  Timeout: {progress.get('timeout', 0)}")
-        print(f"  Skipped: {progress.get('skipped', 0)}")
-        duration = data.get("duration", {})
-        print("Duration:")
-        print(f"  Started:  {duration.get('started_at') or '-'}")
-        print(f"  Ended:    {duration.get('ended_at') or '-'}")
-        dur_s = duration.get("duration_s")
-        print(f"  Duration: {f'{dur_s:.1f}s' if dur_s is not None else '-'}")
-        spec = data.get("spec", {})
-        if spec:
-            print("Spec Summary:")
-            for k, v in spec.items():
-                print(f"  {k}: {v}")
-    else:
-        print(f"Run: {data.get('run_id')}")
-        print(f"Directory: {data.get('run_dir')}")
-        print(f"Status: {data.get('status')}")
-        outcome = data.get("outcome", {})
-        print("Outcome:")
-        print(f"  Success:        {outcome.get('success')}")
-        print(f"  Terminal Cause: {outcome.get('terminal_cause') or '-'}")
-        print(f"  Exit Code:      {outcome.get('exit_code') if outcome.get('exit_code') is not None else '-'}")
-        metrics = data.get("metrics", {})
-        print("Metrics:")
-        ttg = metrics.get("time_to_goal_s")
-        print(f"  Time to Goal:     {f'{ttg:.2f} s' if ttg is not None else '-'}")
-        pl = metrics.get("path_length_m")
-        print(f"  Path Length:      {f'{pl:.2f} m' if pl is not None else '-'}")
-        inf = metrics.get("mean_inference_ms")
-        print(f"  Mean Inference:   {f'{inf:.1f} ms' if inf is not None else '-'}")
-        st = metrics.get("steps")
-        print(f"  Steps:            {st if st is not None else '-'}")
-        fgd = metrics.get("final_goal_distance_m")
-        print(f"  Final Goal Dist:  {f'{fgd:.2f} m' if fgd is not None else '-'}")
-        settings = data.get("settings", {})
-        if settings:
-            print("Settings:")
-            for k in ("method", "robot", "scene", "route", "seed"):
-                if k in settings:
-                    print(f"  {k}: {settings[k]}")
-        print(f"Log: {data.get('log_path') or '-'}")
-
+    (_print_batch if data.get("type") == "batch" else _print_run)(data)
     return 0
 
 
@@ -161,17 +166,44 @@ def handle_runs_compare(args: argparse.Namespace) -> int:
         return 1
 
 
+def _update_manifest_after_rerun(batch_dir: Path, run_dir: Path, exit_code: int) -> None:
+    """Record a rerun's outcome on its manifest entry."""
+    manifest_path = batch_dir / "manifest.json"
+    manifest = BatchManifest.load(manifest_path)
+    for record in manifest.runs:
+        if run_dir.name in (record.id, record.run_dir):
+            record.status = RunStatus.DONE.value if exit_code in (0, 2) else RunStatus.FAILED.value
+            record.exit_code = exit_code
+            summary = load_json(run_dir / "summary.json")
+            if isinstance(summary, dict):
+                record.terminal_cause = summary.get("terminal_cause")
+            record.ended = _utcnow_iso()
+            break
+    manifest.save(manifest_path)
+
+
+def _sync_batch_after_rerun(batch_dir: Path, run_dir: Path, exit_code: int) -> None:
+    """Copy a rerun's outcome back to its batch's manifest and results.csv."""
+    try:
+        _update_manifest_after_rerun(batch_dir, run_dir, exit_code)
+    except (OSError, ValueError) as exc:
+        logger.warning("Failed updating batch manifest after rerun: %s", exc)
+
+    run_csv = run_dir / "results.csv"
+    if run_csv.is_file():
+        try:
+            with run_csv.open("r", encoding="utf-8", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            if rows:
+                append_results_row(batch_dir / "results.csv", rows[-1])
+        except (OSError, csv.Error) as exc:
+            logger.warning("Failed appending to batch results.csv after rerun: %s", exc)
+
+
 def handle_runs_rerun(args: argparse.Namespace) -> int:
     """Handle 'runs rerun' subcommand."""
-    if not args.force:
-        conflicts = check_preflight_processes()
-        if conflicts:
-            logger.error("Active simulation or verification processes detected:")
-            for pid, cmd in conflicts:
-                logger.error("  [PID %d] %s", pid, cmd)
-            logger.error("Refusing to rerun. Use --force to proceed anyway.")
-            return 1
-
+    if refuse_if_simulator_busy(args.force):
+        return 1
     try:
         run_dir, spec = find_run_spec_for_rerun(args.run_id, RUNS_DIR)
     except FileNotFoundError as exc:
@@ -181,51 +213,20 @@ def handle_runs_rerun(args: argparse.Namespace) -> int:
     if args.gui is not None:
         spec.viz.gui = args.gui
 
-    batch_id = ""
-    if run_dir.parent.is_dir():
-        if (run_dir.parent / "manifest.json").is_file() or (run_dir.parent / "batch.yaml").is_file():
-            batch_id = run_dir.parent.name
+    parent = run_dir.parent
+    in_batch = parent.is_dir() and ((parent / "manifest.json").is_file() or (parent / "batch.yaml").is_file())
+    removed = clear_recorded_artifacts(run_dir)  # rerunning is an explicit request to replace the earlier recording
+    if removed:
+        logger.info("Cleared %d recorded file(s) from the previous attempt in %s", removed, run_dir)
 
     exit_code = execute_single_run_process(
         spec=spec,
         run_dir=run_dir,
         quiet=args.quiet,
-        batch_id=batch_id,
+        batch_id=parent.name if in_batch else "",
     )
-
-    # Sync back to batch manifest and batch results.csv if part of a batch
-    if batch_id and (run_dir.parent / "manifest.json").is_file():
-        try:
-            m_path = run_dir.parent / "manifest.json"
-            manifest = BatchManifest.load(m_path)
-            for r in manifest.runs:
-                if r.id == run_dir.name or r.run_dir == run_dir.name:
-                    r.status = RunStatus.DONE.value if exit_code in (0, 2) else RunStatus.FAILED.value
-                    r.exit_code = exit_code
-                    sum_path = run_dir / "summary.json"
-                    if sum_path.is_file():
-                        try:
-                            s_data = json.loads(sum_path.read_text(encoding="utf-8"))
-                            r.terminal_cause = s_data.get("terminal_cause")
-                        except Exception:
-                            pass
-                    r.ended = _utcnow_iso()
-                    break
-            manifest.save(m_path)
-        except Exception as exc:
-            logger.warning("Failed updating batch manifest after rerun: %s", exc)
-
-        batch_csv = run_dir.parent / "results.csv"
-        run_csv = run_dir / "results.csv"
-        if run_csv.is_file():
-            try:
-                with run_csv.open("r", encoding="utf-8") as f:
-                    rows = list(csv.DictReader(f))
-                    if rows:
-                        append_results_row(batch_csv, rows[-1])
-            except Exception as exc:
-                logger.warning("Failed appending to batch results.csv after rerun: %s", exc)
-
+    if in_batch and (parent / "manifest.json").is_file():
+        _sync_batch_after_rerun(parent, run_dir, exit_code)
     return exit_code
 
 

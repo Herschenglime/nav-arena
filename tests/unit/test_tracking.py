@@ -884,3 +884,24 @@ class TestTolerantReaders:
         (tmp_path / "b1" / "manifest.json").write_text("{}")
         with pytest.raises(RuntimeError):
             tracking.list_runs(tmp_path)
+
+
+def test_rerun_clears_the_previous_recording_before_executing(tmp_path, monkeypatch):
+    """Verify `runs rerun` removes the old recorder output (the recorder refuses to overwrite) but keeps run_spec.json."""
+    run_dir = tmp_path / "20261004_000000_iplanner_dingo_hall_straight_ab12"
+    run_dir.mkdir()
+    spec = RunSpec(method="iplanner", route="hall_straight")
+    (run_dir / "run_spec.json").write_text(spec.to_json())
+    (run_dir / "summary.json").write_text("{}")
+    (run_dir / "steps.jsonl").write_text("")
+    monkeypatch.setattr("nav_arena.cli.runs.RUNS_DIR", tmp_path)
+
+    seen = {}
+
+    def fake_exec(spec, run_dir, **kwargs):
+        seen["files"] = sorted(p.name for p in run_dir.iterdir())
+        return 0
+
+    with patch("nav_arena.cli.runs.execute_single_run_process", side_effect=fake_exec):
+        assert main(["runs", "rerun", run_dir.name, "--force"]) == 0
+    assert seen["files"] == ["run_spec.json"]
