@@ -59,7 +59,7 @@ class TestCliRunArgParsing:
             "--force",
         ]
 
-        with patch("nav_arena.cli.managed_process") as mock_mp:
+        with patch("nav_arena.benchmarks.launcher.managed_process") as mock_mp:
             mock_proc = MagicMock()
             mock_proc.stdout = io.StringIO("step 1\nstep 2\n")
             mock_proc.wait.return_value = 0
@@ -96,7 +96,7 @@ class TestCliRunArgParsing:
             "--output", str(run_output),
         ]
 
-        with patch("nav_arena.cli.managed_process") as mock_mp:
+        with patch("nav_arena.benchmarks.launcher.managed_process") as mock_mp:
             mock_proc = MagicMock()
             mock_proc.stdout = io.StringIO("")
             mock_proc.wait.return_value = 0
@@ -121,7 +121,7 @@ class TestCliRunArgParsing:
             "--output", str(run_output),
         ]
 
-        with patch("nav_arena.cli.managed_process") as mock_mp:
+        with patch("nav_arena.benchmarks.launcher.managed_process") as mock_mp:
             mock_proc = MagicMock()
             mock_proc.stdout = io.StringIO("")
             mock_proc.wait.return_value = 0
@@ -167,7 +167,7 @@ class TestCliRunArgParsing:
             "--output", str(run_output),
         ]
 
-        with patch("nav_arena.cli.managed_process") as mock_mp:
+        with patch("nav_arena.benchmarks.launcher.managed_process") as mock_mp:
             mock_proc = MagicMock()
             mock_proc.stdout = io.StringIO("")
             mock_proc.wait.return_value = 0
@@ -192,7 +192,7 @@ class TestCliRunArgParsing:
             "--seeds", "77",
             "--output", str(run_output),
         ]
-        with patch("nav_arena.cli.managed_process") as mock_mp:
+        with patch("nav_arena.benchmarks.launcher.managed_process") as mock_mp:
             mock_proc = MagicMock()
             mock_proc.stdout = io.StringIO("")
             mock_proc.wait.return_value = 0
@@ -221,7 +221,7 @@ class TestCliRunArgParsing:
             "--route", "hall_straight",
             "--output", str(run_output),
         ]
-        with patch("nav_arena.cli.managed_process") as mock_mp:
+        with patch("nav_arena.benchmarks.launcher.managed_process") as mock_mp:
             mock_proc = MagicMock()
             mock_proc.stdout = io.StringIO("")
             mock_proc.wait.return_value = 0
@@ -425,7 +425,7 @@ class TestWorkerProcessExecution:
             mock_p.wait.return_value = 0
             yield mock_p
 
-        with patch("nav_arena.cli.managed_process", side_effect=mock_managed_process):
+        with patch("nav_arena.benchmarks.launcher.managed_process", side_effect=mock_managed_process):
             exit_code = main(["run", "--method", "iplanner", "--route", "hall_straight", "--output", str(run_output)])
 
         assert exit_code == 0
@@ -453,7 +453,7 @@ class TestWorkerProcessExecution:
             mock_p.wait.return_value = 2
             yield mock_p
 
-        with patch("nav_arena.cli.managed_process", side_effect=mock_managed_process):
+        with patch("nav_arena.benchmarks.launcher.managed_process", side_effect=mock_managed_process):
             exit_code = main(["run", "--method", "iplanner", "--route", "hall_straight", "--output", str(run_output)])
 
         assert exit_code == 2
@@ -472,7 +472,7 @@ class TestWorkerProcessExecution:
             mock_p.wait.side_effect = subprocess.TimeoutExpired(cmd, timeout)
             yield mock_p
 
-        with patch("nav_arena.cli.managed_process", side_effect=mock_managed_process):
+        with patch("nav_arena.benchmarks.launcher.managed_process", side_effect=mock_managed_process):
             exit_code = main([
                 "run",
                 "--method", "iplanner",
@@ -501,7 +501,7 @@ class TestWorkerProcessExecution:
             mock_p.wait.return_value = 1  # Crash without writing summary.json
             yield mock_p
 
-        with patch("nav_arena.cli.managed_process", side_effect=mock_managed_process_failing):
+        with patch("nav_arena.benchmarks.launcher.managed_process", side_effect=mock_managed_process_failing):
             exit_code = main([
                 "run",
                 "--method", "iplanner",
@@ -525,7 +525,7 @@ class TestWorkerProcessExecution:
             mock_p.wait.side_effect = KeyboardInterrupt()
             yield mock_p
 
-        with patch("nav_arena.cli.managed_process", side_effect=mock_managed_process_interrupted):
+        with patch("nav_arena.benchmarks.launcher.managed_process", side_effect=mock_managed_process_interrupted):
             exit_code = main([
                 "run",
                 "--method", "iplanner",
@@ -541,7 +541,7 @@ class TestWorkerProcessExecution:
 
     def test_preflight_conflict_detection(self, tmp_path: Path):
         with patch("nav_arena.cli.check_preflight_processes", return_value=[(9999, "python verify_baseline.py")]):
-            with patch("nav_arena.cli.managed_process") as mock_mp:
+            with patch("nav_arena.benchmarks.launcher.managed_process") as mock_mp:
                 # Without --force -> blocked
                 code = main(["run", "--method", "iplanner", "--route", "hall_straight"])
                 assert code == 1

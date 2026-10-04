@@ -253,7 +253,7 @@ class TestMatrixExpansion:
         actual_ids = [r[0] for r in runs]
         assert actual_ids == expected_ids
 
-        run_id, r_spec = runs[0]
+        run_id, r_spec, _label = runs[0]
         assert run_id == "001_iplanner_dingo_hall_straight_s0"
         assert r_spec.method == "iplanner"
         assert r_spec.robot == "dingo"
@@ -266,7 +266,7 @@ class TestMatrixExpansion:
         assert r_spec.limits.max_speed == 0.25
         assert r_spec.limits.stall_timeout_s == 8.0
 
-        run_id_navdp, r_spec_navdp = runs[4]
+        run_id_navdp, r_spec_navdp, _ = runs[4]
         assert r_spec_navdp.method == "navdp"
         assert r_spec_navdp.method_params == {}
 
@@ -283,7 +283,7 @@ class TestMatrixExpansion:
         )
         runs = expand_sweep_matrix(spec)
         assert len(runs) == 1
-        run_id, r_spec = runs[0]
+        run_id, r_spec, _label = runs[0]
         assert run_id == "001_iplanner_dingo_custom_hall_s0"
         assert r_spec.route is None
         assert r_spec.spawn == (0.5, -1.0)
@@ -368,7 +368,7 @@ def mock_worker_subprocess(
 
         yield FakeProc()
 
-    with patch("nav_arena.benchmarks.sweep.managed_process", side_effect=_fake_managed_process):
+    with patch("nav_arena.benchmarks.launcher.managed_process", side_effect=_fake_managed_process):
         yield
 
 
@@ -590,7 +590,7 @@ class TestResumeLogic:
 
             yield FakeProc()
 
-        with patch("nav_arena.benchmarks.sweep.managed_process", side_effect=_tracking_managed_process):
+        with patch("nav_arena.benchmarks.launcher.managed_process", side_effect=_tracking_managed_process):
             code = execute_sweep(
                 spec,
                 batch_dir=batch_dir,

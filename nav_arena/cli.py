@@ -44,15 +44,14 @@ from nav_arena.benchmarks.spec import (
     apply_overrides,
     validate_spec,
 )
+from nav_arena.benchmarks.io import load_json
+from nav_arena.benchmarks.launcher import WorkerOutcome, compute_default_timeout, run_worker
+from nav_arena.benchmarks.results import RESULTS_CSV_COLUMNS, append_results_row, format_results_row
 from nav_arena.benchmarks.sweep import (
-    RESULTS_CSV_COLUMNS,
     SweepSpec,
-    append_results_row,
     apply_sweep_overrides,
     check_preflight_processes,
-    compute_default_timeout,
     execute_sweep,
-    format_results_row,
     resolve_batch_for_resume,
     validate_sweep_spec,
 )
@@ -81,54 +80,6 @@ def generate_run_dir(spec: RunSpec, base_dir: Path | None = None) -> Path:
     return runs_root / f"{timestamp}_{spec.method}_{spec.robot}_{route_name}_{hex4}"
 
 
-def format_results_row(
-    spec: RunSpec,
-    summary_data: dict[str, Any] | None,
-    run_id: str,
-    batch_id: str = "",
-    timed_out: bool = False,
-    failed: bool = False,
-) -> dict[str, Any]:
-    """Format one results.csv dictionary row from RunSpec and summary data."""
-    if timed_out:
-        terminal_cause = "timeout"
-        success = False
-    elif failed or not summary_data:
-        terminal_cause = "failed"
-        success = False
-    elif summary_data:
-        terminal_cause = str(summary_data.get("terminal_cause", "unknown"))
-        success = bool(summary_data.get("success", False))
-    else:
-        terminal_cause = "failed"
-        success = False
-
-    data = summary_data or {}
-
-    return {
-        "batch_id": batch_id,
-        "run_id": run_id,
-        "scene": spec.scene,
-        "robot": spec.robot,
-        "method": spec.method,
-        "method_family": spec.method_family,
-        "route": spec.route if spec.route is not None else "custom",
-        "seed": spec.seed,
-        "terminal_cause": terminal_cause,
-        "success": success,
-        "time_to_goal_s": data.get("time_to_goal_s", ""),
-        "sim_time_s": data.get("sim_time_s", ""),
-        "path_length_m": data.get("path_length_m", ""),
-        "initial_goal_distance_m": data.get("initial_goal_distance_m", ""),
-        "final_goal_distance_m": data.get("final_goal_distance_m", ""),
-        "plans": data.get("plans", ""),
-        "stop_requests": data.get("stop_requests", ""),
-        "mean_inference_ms": data.get("mean_inference_ms", ""),
-        "wall_time_s": data.get("wall_time_s", ""),
-        "goal_tolerance": spec.limits.goal_tolerance,
-        "max_speed": spec.limits.max_speed,
-        "spec_hash": spec.spec_hash,
-    }
 
 
 
@@ -303,118 +254,49 @@ def execute_single_run_process(
     quiet: bool = False,
     batch_id: str = "",
 ) -> int:
-    """Execute worker subprocess for a single run and write artifacts."""
+    """Execute a worker subprocess for a single run and write its artifacts."""
+    if timeout is not None and timeout <= 0:
+        logger.error("--timeout must be a positive number, got %s", timeout)
+        return 1
+    timeout_s = float(timeout) if timeout is not None else compute_default_timeout(spec)
+
     run_dir.mkdir(parents=True, exist_ok=True)
     spec.output_dir = run_dir
+    spec_path = run_dir / "run_spec.json"
+    spec_path.write_text(spec.to_json(), encoding="utf-8")
 
-    # 1. Save resolved spec
-    run_spec_path = run_dir / "run_spec.json"
-    run_spec_path.write_text(spec.to_json(), encoding="utf-8")
-
-    # Clean up any stale summary from a previous run in the same output directory
+    # Drop a stale summary left by an earlier run in the same directory.
     summary_path = run_dir / "summary.json"
-    if summary_path.is_file():
-        try:
-            summary_path.unlink()
-        except OSError:
-            pass
-
-    # 2. Calculate execution timeout
-    if timeout is not None:
-        if timeout <= 0:
-            logger.error("--timeout must be a positive number, got %s", timeout)
-            return 1
-        timeout_s = float(timeout)
-    else:
-        timeout_s = compute_default_timeout(spec)
-
-    # 3. Execute worker subprocess under managed_process
-    worker_cmd = [
-        sys.executable,
-        "-u",
-        "-m",
-        "nav_arena.benchmarks.worker",
-        str(run_spec_path),
-    ]
-
-    log_path = run_dir / "worker.log"
-    log_lines: list[str] = []
-    timed_out = False
-    exit_code = 1
+    summary_path.unlink(missing_ok=True)
 
     try:
-        with open(log_path, "w", encoding="utf-8") as log_file:
-            reader_thread: threading.Thread | None = None
-            try:
-                with managed_process(
-                    worker_cmd,
-                    timeout=5.0,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1,
-                ) as proc:
-                    def _stream_output() -> None:
-                        if proc.stdout is None:
-                            return
-                        for line in iter(proc.stdout.readline, ""):
-                            log_file.write(line)
-                            log_file.flush()
-                            log_lines.append(line)
-                            if not quiet:
-                                sys.stdout.write(line)
-                                sys.stdout.flush()
-
-                    reader_thread = threading.Thread(target=_stream_output, daemon=True)
-                    reader_thread.start()
-
-                    try:
-                        exit_code = proc.wait(timeout=timeout_s)
-                    except subprocess.TimeoutExpired:
-                        timed_out = True
-                        logger.error("Run timed out after %.1f seconds", timeout_s)
-                        exit_code = 1
-            finally:
-                if reader_thread is not None:
-                    reader_thread.join(timeout=5.0)
+        outcome = run_worker(spec_path, run_dir / "worker.log", timeout_s, quiet=quiet)
     except KeyboardInterrupt:
         logger.warning("Run interrupted by user (Ctrl-C).")
-        exit_code = 1
-    except Exception as exc:
-        logger.error("Failed to execute worker process: %s", exc)
-        exit_code = 1
+        outcome = WorkerOutcome(exit_code=1)
+    if outcome.timed_out:
+        logger.error("Run timed out after %.1f seconds", timeout_s)
 
-    # If --quiet, dump output on error
-    if quiet and (exit_code not in (0, 2) or timed_out):
-        sys.stderr.write("".join(log_lines))
-        sys.stderr.flush()
+    summary_data = None
+    if summary_path.is_file() and not outcome.timed_out and outcome.exit_code in (0, 2):
+        summary_data = load_json(summary_path)
 
-    # 4. Record summary to results.csv
-    summary_data: dict[str, Any] | None = None
-    if summary_path.is_file() and not timed_out and exit_code in (0, 2):
-        try:
-            summary_data = json.loads(summary_path.read_text(encoding="utf-8"))
-        except Exception as exc:
-            logger.warning("Failed to read summary.json: %s", exc)
-
-    failed = (exit_code not in (0, 2)) and not timed_out
-    csv_path = run_dir / "results.csv"
+    failed = outcome.exit_code not in (0, 2) and not outcome.timed_out
     row = format_results_row(
         spec=spec,
         summary_data=summary_data,
         run_id=run_dir.name,
         batch_id=batch_id,
-        timed_out=timed_out,
+        timed_out=outcome.timed_out,
         failed=failed,
     )
-    append_results_row(csv_path, row)
+    append_results_row(run_dir / "results.csv", row)
 
-    # 5. Return exit code: 0 goal reached, 2 not reached, 1 failure/timeout
-    if timed_out:
+    # 0 goal reached, 2 not reached, 1 failure/timeout
+    if outcome.timed_out:
         return 1
-    if exit_code in (0, 2):
-        return exit_code
-    return 1
+    return outcome.exit_code if outcome.exit_code in (0, 2) else 1
+
 
 
 def _add_run_subcommand_args(parser: argparse.ArgumentParser) -> None:

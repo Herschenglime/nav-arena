@@ -30,7 +30,7 @@ import subprocess
 import sys
 import threading
 import time
-from typing import Any
+from typing import Any, NamedTuple
 
 import yaml
 
@@ -40,6 +40,8 @@ from nav_arena.benchmarks.manifest import (
     RunStatus,
     _utcnow_iso,
 )
+from nav_arena.benchmarks.launcher import WorkerOutcome, compute_default_timeout, run_worker
+from nav_arena.benchmarks.results import RESULTS_CSV_COLUMNS, append_results_row, format_results_row
 from nav_arena.benchmarks.spec import (
     VALID_METHODS,
     EpisodeLimits,
@@ -53,30 +55,6 @@ from nav_arena.utils.process import managed_process
 
 logger = get_logger("nav_arena.benchmarks.sweep")
 
-RESULTS_CSV_COLUMNS: list[str] = [
-    "batch_id",
-    "run_id",
-    "scene",
-    "robot",
-    "method",
-    "method_family",
-    "route",
-    "seed",
-    "terminal_cause",
-    "success",
-    "time_to_goal_s",
-    "sim_time_s",
-    "path_length_m",
-    "initial_goal_distance_m",
-    "final_goal_distance_m",
-    "plans",
-    "stop_requests",
-    "mean_inference_ms",
-    "wall_time_s",
-    "goal_tolerance",
-    "max_speed",
-    "spec_hash",
-]
 
 
 def check_preflight_processes() -> list[tuple[int, str]]:
@@ -125,107 +103,10 @@ def check_preflight_processes() -> list[tuple[int, str]]:
     return conflicts
 
 
-def compute_default_timeout(spec: RunSpec) -> float:
-    """Calculate default execution timeout in seconds based on episode bounds.
-
-    Formula: (max_steps / 50.0) + stall_timeout_s + 60.0
-    """
-    stall_timeout = spec.limits.stall_timeout_s if spec.limits.stall_timeout_s is not None else 10.0
-    return (spec.limits.max_steps / 50.0) + stall_timeout + 60.0
 
 
-def format_results_row(
-    spec: RunSpec,
-    summary_data: dict[str, Any] | None,
-    run_id: str,
-    batch_id: str = "",
-    route: str | None = None,
-    timed_out: bool = False,
-    failed: bool = False,
-) -> dict[str, Any]:
-    """Format one results.csv dictionary row from RunSpec and summary data."""
-    if timed_out:
-        terminal_cause = "timeout"
-        success = False
-    elif failed or not summary_data:
-        terminal_cause = "failed"
-        success = False
-    elif summary_data:
-        terminal_cause = str(summary_data.get("terminal_cause", "unknown"))
-        success = bool(summary_data.get("success", False))
-    else:
-        terminal_cause = "failed"
-        success = False
-
-    data = summary_data or {}
-    resolved_route = (
-        route if route is not None else (spec.route if spec.route is not None else "custom")
-    )
-
-    return {
-        "batch_id": batch_id,
-        "run_id": run_id,
-        "scene": spec.scene,
-        "robot": spec.robot,
-        "method": spec.method,
-        "method_family": spec.method_family,
-        "route": resolved_route,
-        "seed": spec.seed,
-        "terminal_cause": terminal_cause,
-        "success": success,
-        "time_to_goal_s": data.get("time_to_goal_s", ""),
-        "sim_time_s": data.get("sim_time_s", ""),
-        "path_length_m": data.get("path_length_m", ""),
-        "initial_goal_distance_m": data.get("initial_goal_distance_m", ""),
-        "final_goal_distance_m": data.get("final_goal_distance_m", ""),
-        "plans": data.get("plans", ""),
-        "stop_requests": data.get("stop_requests", ""),
-        "mean_inference_ms": data.get("mean_inference_ms", ""),
-        "wall_time_s": data.get("wall_time_s", ""),
-        "goal_tolerance": spec.limits.goal_tolerance,
-        "max_speed": spec.limits.max_speed,
-        "spec_hash": spec.spec_hash,
-    }
 
 
-def append_results_row(
-    csv_path: Path | str,
-    row: dict[str, Any],
-) -> None:
-    """Append or update a result row in results.csv, creating file and header if needed.
-
-    If a row with the same run_id already exists (e.g. when resuming and retrying a failed
-    or timed-out run), that row is replaced in place to prevent duplicate entries.
-    """
-    path = Path(csv_path)
-    if not path.is_file() or path.stat().st_size == 0:
-        with path.open("w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=RESULTS_CSV_COLUMNS)
-            writer.writeheader()
-            writer.writerow(row)
-        return
-
-    rows: list[dict[str, Any]] = []
-    run_id = row.get("run_id")
-    replaced = False
-    with path.open("r", newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for existing in reader:
-            if run_id and existing.get("run_id") == run_id:
-                rows.append(row)
-                replaced = True
-            else:
-                rows.append(existing)
-
-    if not replaced:
-        rows.append(row)
-
-    tmp_path = path.with_suffix(".csv.tmp")
-    with tmp_path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=RESULTS_CSV_COLUMNS)
-        writer.writeheader()
-        writer.writerows(rows)
-    tmp_path.replace(path)
 
 
 def get_git_info(repo_path: Path | str) -> dict[str, Any]:
@@ -267,6 +148,14 @@ def get_host_info() -> dict[str, str]:
         "platform": platform.platform(),
         "python": sys.version.split()[0],
     }
+
+
+class PlannedRun(NamedTuple):
+    """One expanded sweep entry: its run id, full spec, and the route label recorded in results."""
+
+    run_id: str
+    spec: RunSpec
+    route_label: str
 
 
 @dataclass
@@ -575,17 +464,17 @@ def apply_sweep_overrides(
     return updated
 
 
-def expand_sweep_matrix(spec: SweepSpec) -> list[tuple[str, RunSpec]]:
+def expand_sweep_matrix(spec: SweepSpec) -> list[PlannedRun]:
     """Generate Cartesian product matrix robots x methods x routes x seeds.
 
     Args:
         spec: Validated SweepSpec.
 
     Returns:
-        List of (run_id, RunSpec) pairs in deterministic execution order.
+        List of PlannedRun entries in deterministic execution order.
         Run ID convention: <NNN>_<method>_<robot>_<route>_s<seed>
     """
-    runs: list[tuple[str, RunSpec]] = []
+    runs: list[PlannedRun] = []
     idx = 1
 
     # Outer: robots, then methods, then routes, then seeds
@@ -638,7 +527,7 @@ def expand_sweep_matrix(spec: SweepSpec) -> list[tuple[str, RunSpec]]:
                         limits=limits,
                         viz=viz,
                     )
-                    runs.append((run_id, run_spec))
+                    runs.append(PlannedRun(run_id, run_spec, route_name))
                     idx += 1
 
     return runs
@@ -648,7 +537,7 @@ def setup_batch_directory(
     spec: SweepSpec,
     runs_dir: Path | None = None,
     batch_id: str | None = None,
-) -> tuple[Path, BatchManifest, list[tuple[str, RunSpec]]]:
+) -> tuple[Path, BatchManifest, list[PlannedRun]]:
     """Configure batch directory with batch.yaml, manifest.json, and results.csv.
 
     Args:
@@ -700,16 +589,8 @@ def setup_batch_directory(
 
     # 2. Initialize manifest.json with all runs in queued state
     records: list[RunRecord] = []
-    for run_id, r_spec in expanded_runs:
-        if r_spec.route is not None:
-            route_label = r_spec.route
-        else:
-            prefix = f"{run_id.split('_', 1)[0]}_{r_spec.method}_{r_spec.robot}_"
-            suffix = f"_s{r_spec.seed}"
-            if run_id.startswith(prefix) and run_id.endswith(suffix):
-                route_label = run_id[len(prefix):-len(suffix)]
-            else:
-                route_label = "custom"
+    for planned in expanded_runs:
+        run_id, r_spec = planned.run_id, planned.spec
         records.append(
             RunRecord(
                 id=run_id,
@@ -719,7 +600,7 @@ def setup_batch_directory(
                 method_params=r_spec.method_params,
                 robot=r_spec.robot,
                 scene=r_spec.scene,
-                route=route_label,
+                route=planned.route_label,
                 seed=r_spec.seed,
                 run_dir=run_id,
             )
@@ -818,6 +699,121 @@ def resolve_batch_for_resume(
     )
 
 
+def _prepare_batch(
+    spec: SweepSpec,
+    batch_dir: Path | None,
+    runs_dir: Path | None,
+    batch_id: str | None,
+    resume: bool,
+) -> tuple[Path, BatchManifest, list[PlannedRun]]:
+    """Create a new batch directory, or load an existing one and queue its unfinished runs for retry."""
+    if resume:
+        batch_dir = batch_dir or resolve_batch_for_resume(spec, batch_arg=batch_id, runs_dir=runs_dir)
+        manifest_path = batch_dir / "manifest.json"
+        if not manifest_path.is_file():
+            raise FileNotFoundError(f"Cannot resume: {manifest_path} not found")
+        manifest = BatchManifest.load(manifest_path)
+        for record in manifest.runs:
+            if record.status not in (RunStatus.DONE.value, RunStatus.SKIPPED.value):
+                manifest.reset_run(record.id)
+        manifest.save(manifest_path)
+        return batch_dir, manifest, expand_sweep_matrix(spec)
+
+    if batch_dir is not None:
+        manifest_path = batch_dir / "manifest.json"
+        if manifest_path.is_file():
+            return batch_dir, BatchManifest.load(manifest_path), expand_sweep_matrix(spec)
+        return setup_batch_directory(spec, runs_dir=batch_dir.parent, batch_id=batch_dir.name)
+    return setup_batch_directory(spec, runs_dir=runs_dir, batch_id=batch_id)
+
+
+def _read_summary(summary_path: Path) -> dict[str, Any] | None:
+    """Read a worker's ``summary.json``; ``None`` when missing or unreadable."""
+    if not summary_path.is_file():
+        return None
+    try:
+        return json.loads(summary_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        logger.warning("Failed to parse %s: %s", summary_path, exc)
+        return None
+
+
+def _record_outcome(
+    manifest: BatchManifest,
+    batch_dir: Path,
+    planned: PlannedRun,
+    outcome: WorkerOutcome,
+    timeout_s: float,
+) -> bool:
+    """Record one finished worker in the manifest and results.csv. Returns True for an infrastructure failure."""
+    run_id, run_spec = planned.run_id, planned.spec
+    summary = _read_summary(batch_dir / run_id / "summary.json")
+    row_kwargs = dict(run_id=run_id, batch_id=manifest.batch_id, route=planned.route_label)
+
+    if outcome.timed_out:
+        logger.error("Run %s timed out after %.1f seconds", run_id, timeout_s)
+        manifest.mark_timeout(run_id, error=f"Run timed out after {timeout_s:.1f}s", run_dir=run_id)
+        row = format_results_row(run_spec, None, timed_out=True, **row_kwargs)
+        infra_error = True
+    elif outcome.exit_code in (0, 2):
+        terminal_cause = str(summary.get("terminal_cause", "unknown")) if summary else "unknown"
+        manifest.mark_done(run_id, exit_code=outcome.exit_code, terminal_cause=terminal_cause, run_dir=run_id)
+        row = format_results_row(run_spec, summary, **row_kwargs)
+        logger.info("Finished [%s]: terminal_cause=%s (exit %d)", run_id, terminal_cause, outcome.exit_code)
+        infra_error = False
+    else:
+        logger.error("Run %s failed with worker exit code %d", run_id, outcome.exit_code)
+        manifest.mark_failed(
+            run_id,
+            exit_code=outcome.exit_code,
+            error=f"Worker failed with exit code {outcome.exit_code}",
+            run_dir=run_id,
+        )
+        row = format_results_row(run_spec, None, failed=True, **row_kwargs)
+        infra_error = True
+
+    append_results_row(batch_dir / "results.csv", row)
+    manifest.save(batch_dir / "manifest.json")
+    return infra_error
+
+
+def _execute_planned_run(
+    spec: SweepSpec,
+    manifest: BatchManifest,
+    batch_dir: Path,
+    planned: PlannedRun,
+    quiet: bool,
+    timeout_override: float | None,
+) -> bool:
+    """Run one worker for ``planned`` and record its outcome. Returns True for an infrastructure failure."""
+    run_id, run_spec = planned.run_id, planned.spec
+    run_dir = batch_dir / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    run_spec.output_dir = run_dir
+    spec_path = run_dir / "run_spec.json"
+    spec_path.write_text(run_spec.to_json(), encoding="utf-8")
+
+    stale_summary = run_dir / "summary.json"
+    if stale_summary.is_file():
+        stale_summary.unlink()
+
+    if timeout_override is not None and timeout_override > 0:
+        timeout_s = timeout_override
+    elif spec.timeout_s is not None and spec.timeout_s > 0:
+        timeout_s = spec.timeout_s
+    else:
+        timeout_s = compute_default_timeout(run_spec)
+
+    logger.info("Running [%s] (timeout: %.1fs)", run_id, timeout_s)
+
+    def mark_running(pid: int) -> None:
+        manifest.mark_running(run_id, pid=pid, run_dir=run_id)
+        manifest.save(batch_dir / "manifest.json")
+
+    outcome = run_worker(spec_path, run_dir / "worker.log", timeout_s, quiet=quiet, on_start=mark_running)
+    return _record_outcome(manifest, batch_dir, planned, outcome, timeout_s)
+
+
 def execute_sweep(
     spec: SweepSpec,
     batch_dir: Path | None = None,
@@ -844,7 +840,6 @@ def execute_sweep(
         Exit code: 0 if all runs executed without infrastructure errors/timeouts,
         1 if any run timed out, crashed, or was interrupted.
     """
-    # 1. Pre-flight check
     if not force:
         conflicts = check_preflight_processes()
         if conflicts:
@@ -854,239 +849,37 @@ def execute_sweep(
             logger.error("Refusing to start sweep. Use --force to proceed anyway.")
             return 1
 
-    # 2. Validate spec
     validate_sweep_spec(spec)
-
-    # 3. Setup or resume batch
-    if resume:
-        target_dir = batch_dir
-        if target_dir is None:
-            target_dir = resolve_batch_for_resume(spec, batch_arg=batch_id, runs_dir=runs_dir)
-        manifest_path = target_dir / "manifest.json"
-        if not manifest_path.is_file():
-            raise FileNotFoundError(f"Cannot resume: {manifest_path} not found")
-
-        manifest = BatchManifest.load(manifest_path)
-        batch_dir = target_dir
-        expanded_runs = expand_sweep_matrix(spec)
-
-        # Reset any non-done runs back to queued so they can be retried
-        for r in manifest.runs:
-            if r.status != RunStatus.DONE.value and r.status != RunStatus.SKIPPED.value:
-                manifest.reset_run(r.id)
-        manifest.save(manifest_path)
-    else:
-        if batch_dir is not None:
-            manifest_path = batch_dir / "manifest.json"
-            if manifest_path.is_file():
-                manifest = BatchManifest.load(manifest_path)
-                expanded_runs = expand_sweep_matrix(spec)
-            else:
-                batch_dir, manifest, expanded_runs = setup_batch_directory(
-                    spec, runs_dir=batch_dir.parent, batch_id=batch_dir.name
-                )
-        else:
-            batch_dir, manifest, expanded_runs = setup_batch_directory(
-                spec, runs_dir=runs_dir, batch_id=batch_id
-            )
-
-    logger.info("Starting sweep '%s' in %s (%d runs)", spec.name, batch_dir, len(expanded_runs))
+    batch_dir, manifest, planned_runs = _prepare_batch(spec, batch_dir, runs_dir, batch_id, resume)
+    logger.info("Starting sweep '%s' in %s (%d runs)", spec.name, batch_dir, len(planned_runs))
 
     active_run_id: str | None = None
     infra_error = False
-
     try:
-        # 4. Sequential execution loop
-        for run_id, run_spec in expanded_runs:
-            rec = manifest.get_run(run_id)
-            if rec.status in (RunStatus.DONE.value, RunStatus.SKIPPED.value):
-                logger.info("Skipping run %s (status: %s)", run_id, rec.status)
+        for planned in planned_runs:
+            status = manifest.get_run(planned.run_id).status
+            if status in (RunStatus.DONE.value, RunStatus.SKIPPED.value):
+                logger.info("Skipping run %s (status: %s)", planned.run_id, status)
                 continue
-
-            active_run_id = run_id
-            run_dir = batch_dir / run_id
-            run_dir.mkdir(parents=True, exist_ok=True)
-            run_spec.output_dir = run_dir
-            run_spec_path = run_dir / "run_spec.json"
-            run_spec_path.write_text(run_spec.to_json(), encoding="utf-8")
-
-            if run_spec.route is not None:
-                route_label = run_spec.route
-            else:
-                prefix = f"{run_id.split('_', 1)[0]}_{run_spec.method}_{run_spec.robot}_"
-                suffix = f"_s{run_spec.seed}"
-                if run_id.startswith(prefix) and run_id.endswith(suffix):
-                    route_label = run_id[len(prefix):-len(suffix)]
-                else:
-                    route_label = "custom"
-
-            summary_path = run_dir / "summary.json"
-            if summary_path.is_file():
-                try:
-                    summary_path.unlink()
-                except OSError:
-                    pass
-
-            if timeout_override is not None and timeout_override > 0:
-                timeout_s = timeout_override
-            elif spec.timeout_s is not None and spec.timeout_s > 0:
-                timeout_s = spec.timeout_s
-            else:
-                timeout_s = compute_default_timeout(run_spec)
-
-            worker_cmd = [
-                sys.executable,
-                "-u",
-                "-m",
-                "nav_arena.benchmarks.worker",
-                str(run_spec_path),
-            ]
-
-            log_path = run_dir / "worker.log"
-            log_lines: list[str] = []
-            timed_out = False
-            exit_code = 1
-
-            logger.info("Running [%s] (timeout: %.1fs)", run_id, timeout_s)
-
-            try:
-                with open(log_path, "w", encoding="utf-8") as log_file:
-                    reader_thread: threading.Thread | None = None
-                    try:
-                        with managed_process(
-                            worker_cmd,
-                            timeout=5.0,
-                            stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT,
-                            text=True,
-                            bufsize=1,
-                        ) as proc:
-                            manifest.mark_running(run_id, pid=proc.pid, run_dir=run_id)
-                            manifest.save(batch_dir / "manifest.json")
-
-                            def _stream_output() -> None:
-                                proc_stdout = getattr(proc, "stdout", None)
-                                if proc_stdout is None:
-                                    return
-                                for line in iter(proc_stdout.readline, ""):
-                                    log_file.write(line)
-                                    log_file.flush()
-                                    log_lines.append(line)
-                                    if not quiet:
-                                        sys.stdout.write(line)
-                                        sys.stdout.flush()
-
-                            reader_thread = threading.Thread(target=_stream_output, daemon=True)
-                            reader_thread.start()
-
-                            try:
-                                exit_code = proc.wait(timeout=timeout_s)
-                            except subprocess.TimeoutExpired:
-                                timed_out = True
-                                exit_code = 1
-                    finally:
-                        if reader_thread is not None:
-                            reader_thread.join(timeout=5.0)
-
-            except KeyboardInterrupt:
-                raise
-            except Exception as exc:
-                logger.error("Failed to execute worker for %s: %s", run_id, exc)
-                exit_code = 1
-
-            if quiet and (exit_code not in (0, 2) or timed_out):
-                sys.stderr.write("".join(log_lines))
-                sys.stderr.flush()
-
-            if timed_out:
-                logger.error("Run %s timed out after %.1f seconds", run_id, timeout_s)
-                manifest.mark_timeout(
-                    run_id,
-                    error=f"Run timed out after {timeout_s:.1f}s",
-                    run_dir=run_id,
-                )
-                row = format_results_row(
-                    run_spec,
-                    None,
-                    run_id=run_id,
-                    batch_id=manifest.batch_id,
-                    route=route_label,
-                    timed_out=True,
-                )
-                append_results_row(batch_dir / "results.csv", row)
-                infra_error = True
-            elif exit_code in (0, 2):
-                summary_data: dict[str, Any] | None = None
-                if summary_path.is_file():
-                    try:
-                        summary_data = json.loads(summary_path.read_text(encoding="utf-8"))
-                    except Exception as exc:
-                        logger.warning("Failed to parse summary.json for %s: %s", run_id, exc)
-                terminal_cause = (
-                    str(summary_data.get("terminal_cause", "unknown"))
-                    if summary_data
-                    else "unknown"
-                )
-                manifest.mark_done(
-                    run_id,
-                    exit_code=exit_code,
-                    terminal_cause=terminal_cause,
-                    run_dir=run_id,
-                )
-                row = format_results_row(
-                    run_spec,
-                    summary_data,
-                    run_id=run_id,
-                    batch_id=manifest.batch_id,
-                    route=route_label,
-                )
-                append_results_row(batch_dir / "results.csv", row)
-                logger.info("Finished [%s]: terminal_cause=%s (exit %d)", run_id, terminal_cause, exit_code)
-            else:
-                logger.error("Run %s failed with worker exit code %d", run_id, exit_code)
-                manifest.mark_failed(
-                    run_id,
-                    exit_code=exit_code,
-                    error=f"Worker failed with exit code {exit_code}",
-                    run_dir=run_id,
-                )
-                row = format_results_row(
-                    run_spec,
-                    None,
-                    run_id=run_id,
-                    batch_id=manifest.batch_id,
-                    route=route_label,
-                    failed=True,
-                )
-                append_results_row(batch_dir / "results.csv", row)
-                infra_error = True
-
-            manifest.save(batch_dir / "manifest.json")
+            active_run_id = planned.run_id
+            infra_error |= _execute_planned_run(spec, manifest, batch_dir, planned, quiet, timeout_override)
             active_run_id = None
-
     except KeyboardInterrupt:
         logger.warning("Sweep interrupted by user (Ctrl-C).")
         if active_run_id is not None:
             manifest.mark_failed(
-                active_run_id,
-                exit_code=1,
-                error="Interrupted by user (SIGINT)",
-                run_dir=active_run_id,
+                active_run_id, exit_code=1, error="Interrupted by user (SIGINT)", run_dir=active_run_id
             )
             manifest.save(batch_dir / "manifest.json")
         _update_batch_yaml(batch_dir, status="interrupted", ended_at=_utcnow_iso())
         return 1
 
-    # 5. Finalize batch status
     final_status = "failed" if infra_error else "completed"
     _update_batch_yaml(batch_dir, status=final_status, ended_at=_utcnow_iso())
     logger.info("Sweep batch '%s' %s", manifest.batch_id, final_status)
 
     counts = manifest.counts_by_status()
-    if (
-        not manifest.is_finished()
-        or counts.get(RunStatus.FAILED.value, 0) > 0
-        or counts.get(RunStatus.TIMEOUT.value, 0) > 0
-    ):
+    unfinished = not manifest.is_finished()
+    if unfinished or counts.get(RunStatus.FAILED.value, 0) > 0 or counts.get(RunStatus.TIMEOUT.value, 0) > 0:
         return 1
     return 0
