@@ -443,75 +443,74 @@ def main():
 
     configure_logging(args_cli.log_level)
 
-    # Mandatory boot-time extension flag for Isaac Sim Occupancy Map
-    sys.argv.extend([
-        "--enable", "isaacsim.asset.gen.omap",
-        "--enable", "isaacsim.asset.gen.omap.ui",
-    ])
-
-    app_launcher = AppLauncher(args_cli)
-    simulation_app = app_launcher.app
+    from nav_arena.core import launch_simulation_app
 
     try:
-        _ensure_omni_modules()
+        with launch_simulation_app(
+            args_cli,
+            enable_ros2=False,
+            enable_omap=True,
+            livestream=False,
+        ) as simulation_app:
+            _ensure_omni_modules()
 
-        # Resolve scene USD path
-        stage_preprocessor = None
-        try:
-            from nav_arena.scenes.interior_agent import get_open_door_usd, prepare_interior_agent_stage
 
-            usd_path = get_open_door_usd(args_cli.scene)
-            stage_preprocessor = prepare_interior_agent_stage
-            scene_id = os.path.splitext(os.path.basename(usd_path))[0]
-            if scene_id.endswith("_open_doors"):
-                scene_id = scene_id[:-len("_open_doors")]
-        except Exception:
-            usd_path = os.path.abspath(args_cli.scene) if os.path.isfile(args_cli.scene) else args_cli.scene
-            scene_id = os.path.splitext(os.path.basename(usd_path))[0]
+            # Resolve scene USD path
+            stage_preprocessor = None
+            try:
+                from nav_arena.scenes.interior_agent import get_open_door_usd, prepare_interior_agent_stage
 
-        logger.info(f"Opening USD stage: {usd_path}")
-        omni.usd.get_context().open_stage(usd_path)
-        stage = omni.usd.get_context().get_stage()
-        if stage is None:
-            raise RuntimeError(f"Failed to open stage at: {usd_path}")
+                usd_path = get_open_door_usd(args_cli.scene)
+                stage_preprocessor = prepare_interior_agent_stage
+                scene_id = os.path.splitext(os.path.basename(usd_path))[0]
+                if scene_id.endswith("_open_doors"):
+                    scene_id = scene_id[:-len("_open_doors")]
+            except Exception:
+                usd_path = os.path.abspath(args_cli.scene) if os.path.isfile(args_cli.scene) else args_cli.scene
+                scene_id = os.path.splitext(os.path.basename(usd_path))[0]
 
-        # Ensure physicsScene exists
-        if (
-            not stage.GetPrimAtPath("/World/physicsScene").IsValid()
-            and not stage.GetPrimAtPath("/physicsScene").IsValid()
-        ):
-            UsdPhysics.Scene.Define(stage, Sdf.Path("/World/physicsScene"))
+            logger.info(f"Opening USD stage: {usd_path}")
+            omni.usd.get_context().open_stage(usd_path)
+            stage = omni.usd.get_context().get_stage()
+            if stage is None:
+                raise RuntimeError(f"Failed to open stage at: {usd_path}")
 
-        if stage.GetPrimAtPath("/Root").IsValid():
-            scene_prim = "/Root"
-        elif stage.GetPrimAtPath("/World/Scene").IsValid():
-            scene_prim = "/World/Scene"
-        elif stage.GetDefaultPrim().IsValid():
-            scene_prim = stage.GetDefaultPrim().GetPath().pathString
-        else:
-            scene_prim = "/"
+            # Ensure physicsScene exists
+            if (
+                not stage.GetPrimAtPath("/World/physicsScene").IsValid()
+                and not stage.GetPrimAtPath("/physicsScene").IsValid()
+            ):
+                UsdPhysics.Scene.Define(stage, Sdf.Path("/World/physicsScene"))
 
-        yaml_path = get_occupancy_map(
-            scene_id=scene_id,
-            scene_prim_path=scene_prim,
-            bounds_prim_path=args_cli.bounds_prim,
-            cell_size=args_cli.cell_size,
-            z_min=args_cli.z_min,
-            z_max=args_cli.z_max,
-            cache_root=args_cli.cache_root,
-            output_dir=args_cli.output_dir,
-            force_generate=args_cli.force,
-            warmup_steps=args_cli.warmup_steps,
-            stage_preprocessor=stage_preprocessor,
-        )
+            if stage.GetPrimAtPath("/Root").IsValid():
+                scene_prim = "/Root"
+            elif stage.GetPrimAtPath("/World/Scene").IsValid():
+                scene_prim = "/World/Scene"
+            elif stage.GetDefaultPrim().IsValid():
+                scene_prim = stage.GetDefaultPrim().GetPath().pathString
+            else:
+                scene_prim = "/"
 
-        logger.section("Occupancy Map Generation Complete")
-        logger.success(f"Occupancy map generated successfully: {yaml_path}")
+            yaml_path = get_occupancy_map(
+                scene_id=scene_id,
+                scene_prim_path=scene_prim,
+                bounds_prim_path=args_cli.bounds_prim,
+                cell_size=args_cli.cell_size,
+                z_min=args_cli.z_min,
+                z_max=args_cli.z_max,
+                cache_root=args_cli.cache_root,
+                output_dir=args_cli.output_dir,
+                force_generate=args_cli.force,
+                warmup_steps=args_cli.warmup_steps,
+                stage_preprocessor=stage_preprocessor,
+            )
+
+            logger.section("Occupancy Map Generation Complete")
+            logger.success(f"Occupancy map generated successfully: {yaml_path}")
     except Exception as e:
         logger.error(f"Exception during occupancy map generation: {e}", exc_info=True)
         raise
-    finally:
-        simulation_app.close()
+
 
 
 if __name__ == "__main__":

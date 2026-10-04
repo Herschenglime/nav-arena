@@ -14,6 +14,8 @@ from nav_arena.utils.logger import (
     configure_logging,
     get_logger,
 )
+from nav_arena.utils.process import managed_process
+from nav_arena.utils.sim import create_mock_env
 
 __all__ = [
     "SUCCESS",
@@ -23,4 +25,7 @@ __all__ = [
     "add_logger_args",
     "configure_logging",
     "get_logger",
+    "managed_process",
+    "create_mock_env",
 ]
+

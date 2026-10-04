@@ -13,6 +13,7 @@ import torch
 
 from isaaclab.app import AppLauncher
 
+from nav_arena.core import launch_simulation_app
 from nav_arena.utils import add_logger_args, configure_logging, get_logger
 
 logger = get_logger("verify_task")
@@ -27,23 +28,13 @@ args_cli = parser.parse_args()
 
 configure_logging(args_cli.log_level)
 
-# Launch Omniverse application
-app_launcher = AppLauncher(args_cli)
-simulation_app = app_launcher.app
-
-"""Simulation app is now active - Omniverse / Isaac Lab imports are safe."""
-
-import carb.settings
-
-_carb_settings = carb.settings.get_settings()
-_carb_settings.set("/app/livestream/allowResize", True)
-_carb_settings.set("/exts/omni.kit.livestream.app/primaryStream/allowDynamicResize", True)
-
-from nav_arena.tasks import PointNavTask, create_point_nav_env_cfg
 
 
 def run_verification():
+    from nav_arena.tasks import PointNavTask, create_point_nav_env_cfg
+
     logger.section(f"PointNav Task & Metrics Verification: '{args_cli.scene}'")
+
 
     # Robot spawn location and target goal in the wide living room opening
     spawn_pos = (-2.5, 0.0, 0.25)
@@ -154,12 +145,12 @@ def run_verification():
 
 def main():
     try:
-        run_verification()
+        with launch_simulation_app(args_cli, enable_ros2=False, livestream=True) as simulation_app:
+            run_verification()
     except Exception as e:
         logger.error(f"Exception occurred during PointNav verification: {e}", exc_info=True)
         sys.exit(1)
-    finally:
-        simulation_app.close()
+
 
 
 if __name__ == "__main__":

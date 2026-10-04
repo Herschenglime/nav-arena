@@ -16,6 +16,7 @@ import yaml
 
 from isaaclab.app import AppLauncher
 
+from nav_arena.core import launch_simulation_app
 from nav_arena.utils import add_logger_args, configure_logging, get_logger
 
 logger = get_logger("verify_occupancy_map")
@@ -33,42 +34,11 @@ args_cli = parser.parse_args()
 
 configure_logging(args_cli.log_level)
 
-# Mandatory boot-time extension flag for Isaac Sim Occupancy Map
-sys.argv.extend([
-    "--enable", "isaacsim.asset.gen.omap",
-    "--enable", "isaacsim.asset.gen.omap.ui",
-])
-
-# Launch Omniverse application
-app_launcher = AppLauncher(args_cli)
-simulation_app = app_launcher.app
-
-import omni.usd
-import isaaclab.sim as sim_utils
-from isaaclab.assets import AssetBaseCfg
-from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
-from isaaclab.utils.configclass import configclass
-
-from nav_arena.embodiments.nova_carter import NovaCarterEmbodimentCfg
-from nav_arena.tools.map_generator import generate_occupancy_map, get_occupancy_map
-from nav_arena.scenes.interior_agent import get_open_door_usd, prepare_interior_agent_stage, resolve_interior_agent_usd
-
-
-@configclass
-class ArchitecturalSceneCfg(InteractiveSceneCfg):
-    """Scene containing purely the static architectural geometry without robot embodiment."""
-
-    env_spacing: float = 30.0
-    scene_asset: AssetBaseCfg = AssetBaseCfg(
-        prim_path="/World/Scene",
-        spawn=sim_utils.UsdFileCfg(
-            usd_path="",  # Populated dynamically
-            collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
-        ),
-    )
-
 
 def verify_occupancy_map():
+    from nav_arena.embodiments.nova_carter import NovaCarterEmbodimentCfg
+    from nav_arena.tools.map_generator import generate_occupancy_map, get_occupancy_map
+    from nav_arena.scenes.interior_agent import get_open_door_usd, prepare_interior_agent_stage, resolve_interior_agent_usd
     logger.section(f"OCCUPANCY MAP VERIFICATION: '{args_cli.scene}'")
 
     # 1. Resolve USD path with open doors delta layer
@@ -82,12 +52,15 @@ def verify_occupancy_map():
     logger.info(f"Derived Z-bounds from '{embodiment.name}': z_min={z_min:.2f} m, z_max={z_max:.2f} m")
 
     # 3. Load stage and ensure physicsScene exists
+    import omni.usd
+
     logger.info(f"Opening stage for '{args_cli.scene}'...")
     omni.usd.get_context().open_stage(usd_path)
     stage = omni.usd.get_context().get_stage()
     if not stage.GetPrimAtPath("/World/physicsScene").IsValid() and not stage.GetPrimAtPath("/physicsScene").IsValid():
         from pxr import Sdf, UsdPhysics
         UsdPhysics.Scene.Define(stage, Sdf.Path("/World/physicsScene"))
+
 
     scene_prim = "/Root" if stage.GetPrimAtPath("/Root").IsValid() else "/World/Scene"
 
@@ -181,12 +154,17 @@ def verify_occupancy_map():
 
 def main():
     try:
-        verify_occupancy_map()
+        with launch_simulation_app(
+            args_cli,
+            enable_ros2=False,
+            enable_omap=True,
+            livestream=False,
+        ) as simulation_app:
+            verify_occupancy_map()
     except Exception as e:
         logger.error(f"Exception occurred during verification: {e}", exc_info=True)
         sys.exit(1)
-    finally:
-        simulation_app.close()
+
 
 
 if __name__ == "__main__":

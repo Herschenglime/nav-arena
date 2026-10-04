@@ -13,7 +13,8 @@ import torch
 
 from isaaclab.app import AppLauncher
 
-from nav_arena.utils import add_logger_args, configure_logging, get_logger
+from nav_arena.core import launch_simulation_app
+from nav_arena.utils import add_logger_args, configure_logging, create_mock_env, get_logger
 
 logger = get_logger("verify_scene")
 
@@ -27,47 +28,24 @@ args_cli = parser.parse_args()
 
 configure_logging(args_cli.log_level)
 
-# Mandatory boot-time extension flags for OmniGraph schemas and ROS 2 bridge
-sys.argv.extend([
-    "--enable", "omni.graph",
-    "--enable", "omni.graph.action",
-    "--enable", "isaacsim.ros2.bridge",
-    "--enable", "isaacsim.ros2.nodes",
-    "--/exts/omni.kit.livestream.app/primaryStream/allowDynamicResize=true",
-    "--/app/livestream/allowResize=true",
-])
+def run_verification(simulation_app):
+    import isaaclab.sim as sim_utils
+    from isaaclab.assets import Articulation
+    from isaaclab.managers import ActionManager
+    from isaaclab.scene import InteractiveScene
+    from isaaclab.utils.configclass import configclass
 
-# Launch Omniverse application
-app_launcher = AppLauncher(args_cli)
-simulation_app = app_launcher.app
+    from nav_arena.embodiments import NOVA_CARTER_ACTION_CFG
+    from nav_arena.scenes import create_interior_agent_scene_cfg
+    from nav_arena.ros2 import build_ros2_omnigraph
 
-"""Simulation app is now active - Omniverse / Isaac Lab imports are safe."""
+    @configclass
+    class EmbodimentActionCfg:
+        """Action configuration for Nova Carter differential drive."""
 
-import carb.settings
-
-_carb_settings = carb.settings.get_settings()
-_carb_settings.set("/app/livestream/allowResize", True)
-_carb_settings.set("/exts/omni.kit.livestream.app/primaryStream/allowDynamicResize", True)
-
-import isaaclab.sim as sim_utils
-from isaaclab.assets import Articulation
-from isaaclab.managers import ActionManager
-from isaaclab.scene import InteractiveScene
-from isaaclab.utils.configclass import configclass
-
-from nav_arena.embodiments import NOVA_CARTER_ACTION_CFG
-from nav_arena.ros2 import build_ros2_omnigraph
-from nav_arena.scenes import create_interior_agent_scene_cfg
+        robot_action = NOVA_CARTER_ACTION_CFG.replace(asset_name="robot")
 
 
-@configclass
-class EmbodimentActionCfg:
-    """Action configuration for Nova Carter differential drive."""
-
-    robot_action = NOVA_CARTER_ACTION_CFG.replace(asset_name="robot")
-
-
-def run_verification():
     logger.section(f"INTERIORAGENT SCENE VERIFICATION: '{args_cli.scene}'")
     logger.info(f"Setting up SimulationContext with scene '{args_cli.scene}'...")
     sim_cfg = sim_utils.SimulationCfg(dt=0.01)
@@ -88,22 +66,14 @@ def run_verification():
     logger.info("Creating InteractiveScene...")
     scene = InteractiveScene(scene_cfg)
 
-    import types
-
-    mock_env = types.SimpleNamespace(
-        scene=scene,
-        sim=sim,
-        device=sim.device,
-        num_envs=scene.num_envs,
-        physics_dt=sim.get_physics_dt(),
-        step_dt=sim.get_physics_dt(),
-    )
+    mock_env = create_mock_env(scene, sim)
 
     # Initialize ROS 2 OmniGraph bridge before timeline playback
     logger.info("Initializing ROS 2 OmniGraph bridge...")
     build_ros2_omnigraph(
         robot_prim_path="/World/envs/env_0/Robot/chassis_link",
     )
+
 
     # Reset simulator to initialize physics views and start playback
     sim.reset()
@@ -200,13 +170,15 @@ def run_verification():
 
 def main():
     try:
-        run_verification()
+        with launch_simulation_app(args_cli, enable_ros2=True, livestream=True) as simulation_app:
+            run_verification(simulation_app)
     except Exception as e:
         logger.error(f"Exception occurred during verification: {e}", exc_info=True)
+        sys.exit(1)
     except BaseException as e:
         logger.critical(f"BaseException occurred: {type(e)}: {e}", exc_info=True)
-    finally:
-        simulation_app.close()
+        sys.exit(1)
+
 
 
 if __name__ == "__main__":

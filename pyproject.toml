@@ -17,5 +17,10 @@ include = ["nav_arena*"]
 [tool.pytest.ini_options]
 addopts = "-p no:launch_ros -p no:launch-testing-ros -p no:launch_testing"
 testpaths = ["tests/unit"]
+markers = [
+    "unit: Fast L1 CPU unit tests without simulation or Kit dependency.",
+    "ros2: L2 in-memory and subprocess ROS 2 middleware and node tests.",
+    "integration: L3 end-to-end simulation integration tests run in isolated subprocesses.",
+]
 
 
