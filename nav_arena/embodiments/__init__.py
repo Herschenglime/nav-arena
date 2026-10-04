@@ -9,8 +9,8 @@ from .actions import DifferentialDriveAction, DifferentialDriveActionCfg
 from .base import RobotEmbodimentCfg
 from .dingo import (
     DINGO_ACTION_CFG,
-    DINGO_CFG,
     DingoEmbodimentCfg,
+    create_dingo_articulation_cfg,
 )
 from .kinematics import diff_drive_fk, diff_drive_ik
 from .nova_carter import (
@@ -50,7 +50,7 @@ __all__ = [
     "NOVA_CARTER_CFG",
     "NOVA_CARTER_ACTION_CFG",
     "NovaCarterEmbodimentCfg",
-    "DINGO_CFG",
+    "create_dingo_articulation_cfg",
     "DINGO_ACTION_CFG",
     "DingoEmbodimentCfg",
     "SensorSuiteCfg",

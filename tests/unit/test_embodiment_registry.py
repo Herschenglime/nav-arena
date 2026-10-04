@@ -17,7 +17,6 @@ import pytest
 import nav_arena.embodiments as embodiments
 from nav_arena.embodiments import (
     DINGO_ACTION_CFG,
-    DINGO_CFG,
     NOVA_CARTER_ACTION_CFG,
     NOVA_CARTER_CFG,
     DingoEmbodimentCfg,

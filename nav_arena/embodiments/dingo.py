@@ -35,46 +35,48 @@ def _resolve_dingo_usd() -> str:
     return str(ensure_derived_asset("dingo", DINGO_SOURCE_USD_PATH, CACHE_DIR))
 
 
-DINGO_USD_PATH = _resolve_dingo_usd()
-"""Derived asset: the upstream Dingo plus nav_arena's static fixes; see :mod:`nav_arena.embodiments.assets`."""
-
-
 ##
 # Articulation Configuration
 ##
 
-DINGO_CFG = ArticulationCfg(
-    spawn=sim_utils.UsdFileCfg(
-        usd_path=DINGO_USD_PATH,
-        scale=(1.0, 1.0, 1.0),
-        articulation_props=sim_utils.ArticulationRootPropertiesCfg(
-            enabled_self_collisions=False,
-            solver_position_iteration_count=8,
-            solver_velocity_iteration_count=4,
+
+def create_dingo_articulation_cfg(usd_path: str | None = None) -> ArticulationCfg:
+    """Configuration factory for the Clearpath Dingo articulation asset.
+
+    Resolves the derived Dingo USD on demand if ``usd_path`` is not provided.
+    """
+    resolved_usd_path = usd_path if usd_path is not None else _resolve_dingo_usd()
+    return ArticulationCfg(
+        spawn=sim_utils.UsdFileCfg(
+            usd_path=resolved_usd_path,
+            scale=(1.0, 1.0, 1.0),
+            articulation_props=sim_utils.ArticulationRootPropertiesCfg(
+                enabled_self_collisions=False,
+                solver_position_iteration_count=8,
+                solver_velocity_iteration_count=4,
+            ),
+            activate_contact_sensors=True,
         ),
-        activate_contact_sensors=True,
-    ),
-    init_state=ArticulationCfg.InitialStateCfg(
-        pos=(0.0, 0.0, 0.25),
-        rot=(0.0, 0.0, 0.0, 1.0),
-        joint_pos={
-            "left_wheel_joint": 0.0,
-            "right_wheel_joint": 0.0,
+        init_state=ArticulationCfg.InitialStateCfg(
+            pos=(0.0, 0.0, 0.25),
+            rot=(0.0, 0.0, 0.0, 1.0),
+            joint_pos={
+                "left_wheel_joint": 0.0,
+                "right_wheel_joint": 0.0,
+            },
+            joint_vel={".*": 0.0},
+        ),
+        actuators={
+            "wheels": ImplicitActuatorCfg(
+                joint_names_expr=["left_wheel_joint", "right_wheel_joint"],
+                effort_limit=20.0,
+                effort_limit_sim=20.0,
+                velocity_limit_sim=20.0,
+                stiffness=0.0,
+                damping=1.0,
+            ),
         },
-        joint_vel={".*": 0.0},
-    ),
-    actuators={
-        "wheels": ImplicitActuatorCfg(
-            joint_names_expr=["left_wheel_joint", "right_wheel_joint"],
-            effort_limit=20.0,
-            effort_limit_sim=20.0,
-            velocity_limit_sim=20.0,
-            stiffness=0.0,
-            damping=1.0,
-        ),
-    },
-)
-"""Configuration for the Clearpath Dingo articulation asset."""
+    )
 
 
 ##
@@ -102,7 +104,7 @@ class DingoEmbodimentCfg(RobotEmbodimentCfg):
     """Convenience container coupling the Clearpath Dingo robot and its action term."""
 
     name: str = "dingo"
-    articulation_cfg: ArticulationCfg = field(default_factory=lambda: DINGO_CFG)
+    articulation_cfg: ArticulationCfg = field(default_factory=create_dingo_articulation_cfg)
     action_cfg: DifferentialDriveActionCfg = field(default_factory=lambda: DINGO_ACTION_CFG)
     wheel_radius: float = 0.1225
     wheel_base: float = 0.4523232
