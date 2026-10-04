@@ -41,6 +41,7 @@ class BackgroundRos2Executor:
             nodes: Optional sequence of ROS 2 Node instances to attach.
             executor: Optional custom rclpy Executor. If None, a SingleThreadedExecutor is used.
         """
+        self._custom_executor: bool = executor is not None
         self._executor = executor
         self._nodes: list[Node] = list(nodes) if nodes is not None else []
         self._thread: threading.Thread | None = None
@@ -103,6 +104,11 @@ class BackgroundRos2Executor:
                 _logger.warning("BackgroundRos2Executor is already running.")
                 return
 
+            if self._custom_executor and self._executor is not None and getattr(self._executor, "_is_shutdown", False):
+                raise RuntimeError(
+                    "Cannot restart BackgroundRos2Executor because the custom underlying executor has already been shut down."
+                )
+
             self._is_shutdown = False
             # Ensure executor is instantiated
             _ = self.executor
@@ -134,11 +140,6 @@ class BackgroundRos2Executor:
         """
         with self._lock:
             self._is_shutdown = True
-            if self._executor is not None:
-                try:
-                    self._executor.shutdown()
-                except Exception:
-                    pass
 
         if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout=timeout_sec)
@@ -146,6 +147,15 @@ class BackgroundRos2Executor:
                 _logger.warning(
                     f"BackgroundRos2Executor thread did not terminate within {timeout_sec}s."
                 )
+
+        with self._lock:
+            if self._executor is not None:
+                try:
+                    self._executor.shutdown()
+                except Exception:
+                    pass
+            if not self._custom_executor:
+                self._executor = None
 
     def __enter__(self) -> BackgroundRos2Executor:
         self.start()

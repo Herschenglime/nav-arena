@@ -28,8 +28,16 @@ parser.add_argument("--spawn-yaw", type=float, default=0.0, help="Robot spawn he
 parser.add_argument("--goal-x", type=float, default=5.70, help="Navigation goal X coordinate (m). Default: 5.70 (East bedroom)")
 parser.add_argument("--goal-y", type=float, default=-1.52, help="Navigation goal Y coordinate (m). Default: -1.52 (East bedroom)")
 parser.add_argument("--goal-yaw", type=float, default=0.0, help="Navigation goal heading (rad). Default: 0.0")
+
+from nav_arena.utils import add_logger_args, configure_logging, get_logger
+
+logger = get_logger("verify_nav2")
+
+add_logger_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, _ = parser.parse_known_args()
+
+configure_logging(args_cli.log_level)
 
 # 2. Mandatory boot-time flag injection for OmniGraph and ROS 2 bridges
 sys.argv.extend([
@@ -72,12 +80,9 @@ from nav_arena.tasks import PointNavTask, create_point_nav_env_cfg
 
 
 def run_nav2_verification():
-    print("=" * 70)
-    print("VERIFYING NAV2 AUTONOMOUS NAVIGATION IN SIMULATION")
-    print(f"Scene: {args_cli.scene}")
-    print(f"Spawn: ({args_cli.spawn_x:.2f}, {args_cli.spawn_y:.2f}) [yaw={args_cli.spawn_yaw:.2f} rad]")
-    print(f"Goal:  ({args_cli.goal_x:.2f}, {args_cli.goal_y:.2f}) [yaw={args_cli.goal_yaw:.2f} rad]")
-    print("=" * 70)
+    logger.section(f"VERIFYING NAV2 AUTONOMOUS NAVIGATION IN SIMULATION: Scene={args_cli.scene}")
+    logger.info(f"Spawn: ({args_cli.spawn_x:.2f}, {args_cli.spawn_y:.2f}) [yaw={args_cli.spawn_yaw:.2f} rad]")
+    logger.info(f"Goal:  ({args_cli.goal_x:.2f}, {args_cli.goal_y:.2f}) [yaw={args_cli.goal_yaw:.2f} rad]")
 
     # 4. Configure PointNavTask environment in kujiale_0003
     spawn_pos = (args_cli.spawn_x, args_cli.spawn_y, 0.25)
@@ -98,15 +103,14 @@ def run_nav2_verification():
         num_envs=1,
     )
 
-    print("[INFO] Instantiating PointNavTask environment...")
+    logger.info("Instantiating PointNavTask environment...")
     env = PointNavTask(cfg=env_cfg)
 
     # Position viewport camera to frame the robot and path
-
     env.sim.set_camera_view(eye=[-1.75, -2.8, 2.5], target=[-1.75, 0.0, 0.3])
 
     # 5. Build OmniGraph ROS 2 bridge for Clock, TF, and Odometry
-    print("[INFO] Constructing OmniGraph ROS 2 Bridge...")
+    logger.info("Constructing OmniGraph ROS 2 Bridge...")
     robot_prim_path = "/World/envs/env_0/Robot/chassis_link"
     build_ros2_omnigraph(
         robot_prim_path=robot_prim_path,
@@ -117,11 +121,11 @@ def run_nav2_verification():
     )
 
     # 6. Environment Warmup Step
-    print("[INFO] Performing environment warmup reset...")
+    logger.info("Performing environment warmup reset...")
     env.reset()
 
     # 7. Initialize ROS 2 nodes
-    print("[INFO] Initializing ROS 2 interfaces...")
+    logger.info("Initializing ROS 2 interfaces...")
     rclpy.init()
     action_adapter = TwistActionAdapter(num_envs=env.num_envs, device=env.device)
     state_publisher = TaskStatePublisherNode()
@@ -158,7 +162,7 @@ def run_nav2_verification():
         f"initial_pose_y:={args_cli.spawn_y}",
         f"initial_pose_yaw:={args_cli.spawn_yaw}",
     ]
-    print(f"[INFO] Starting Nav2 process: {' '.join(nav2_cmd)}")
+    logger.info(f"Starting Nav2 process: {' '.join(nav2_cmd)}")
     log_file_path = "/home/robopi/simulation/nav2_bringup.log"
     log_file = open(log_file_path, "w")
     nav2_proc = subprocess.Popen(
@@ -171,7 +175,7 @@ def run_nav2_verification():
 
     try:
         # 9. Warmup phase: step simulation to pump /clock and /scan until Nav2 lifecycle manager transitions all nodes to ACTIVE
-        print("[INFO] Stepping simulation to pump /clock and /scan for Nav2 lifecycle startup...")
+        logger.info("Stepping simulation to pump /clock and /scan for Nav2 lifecycle startup...")
         warmup_start = time.time()
         nav2_ready = False
         active_req_future = None
@@ -201,7 +205,7 @@ def run_nav2_verification():
                 try:
                     res = active_req_future.result()
                     if res is not None and res.current_state.id == State.PRIMARY_STATE_ACTIVE:
-                        print(f"[INFO] Nav2 bt_navigator reports ACTIVE (after {time.time() - warmup_start:.1f}s, step {step})!")
+                        logger.info(f"Nav2 bt_navigator reports ACTIVE (after {time.time() - warmup_start:.1f}s, step {step})!")
                         nav2_ready = True
                         break
                 except Exception:
@@ -209,14 +213,14 @@ def run_nav2_verification():
                 active_req_future = None
 
             if step % 50 == 0:
-                print(f"[INFO] Warmup step {step} ({time.time() - warmup_start:.1f}s elapsed), waiting for Nav2 active...")
+                logger.info(f"Warmup step {step} ({time.time() - warmup_start:.1f}s elapsed), waiting for Nav2 active...")
 
         if not nav2_ready:
-            print("[WARN] Nav2 lifecycle manager did not report active status during warmup window. Checking process status...")
+            logger.warning("Nav2 lifecycle manager did not report active status during warmup window. Checking process status...")
             if nav2_proc.poll() is not None:
                 log_file.flush()
                 with open(log_file_path, "r") as f:
-                    print(f"[ERROR] Nav2 process died prematurely:\n{f.read()[-2000:]}")
+                    logger.error(f"Nav2 process died prematurely:\n{f.read()[-2000:]}")
                 assert False, "Nav2 process crashed during startup."
             else:
                 assert False, f"Nav2 failed to report active status within {max_warmup_steps} simulation steps."
@@ -234,7 +238,7 @@ def run_nav2_verification():
         init_msg.pose.covariance[7] = 0.05
         init_msg.pose.covariance[35] = 0.05
         initial_pose_pub.publish(init_msg)
-        print(f"[INFO] Published initial pose to AMCL: ({args_cli.spawn_x:.2f}, {args_cli.spawn_y:.2f}) [yaw={args_cli.spawn_yaw:.2f} rad]")
+        logger.info(f"Published initial pose to AMCL: ({args_cli.spawn_x:.2f}, {args_cli.spawn_y:.2f}) [yaw={args_cli.spawn_yaw:.2f} rad]")
 
         # Step simulation to allow AMCL and costmaps to integrate scans before dispatching goal
         for _ in range(30):
@@ -243,11 +247,11 @@ def run_nav2_verification():
             scan_publisher.publish_from_raycaster(lidar.data.ray_hits_w, lidar.data.pos_w)
             simulation_app.update()
 
-        print("[INFO] Nav2 is active! Dispatching goal to NavigateToPose action server...")
+        logger.info("Nav2 is active! Dispatching goal to NavigateToPose action server...")
         goal_x, goal_y, goal_heading = env.get_goal_pose_w(0)
 
         nav_action_client = ActionClient(test_node, NavigateToPose, "navigate_to_pose")
-        print("[INFO] Waiting for NavigateToPose action server...")
+        logger.info("Waiting for NavigateToPose action server...")
         server_ready = False
         wait_start = time.time()
         while time.time() - wait_start < 20.0 and nav2_proc.poll() is None:
@@ -275,11 +279,11 @@ def run_nav2_verification():
 
         goal_handle = goal_future.result()
         assert goal_handle.accepted, "Nav2 bt_navigator rejected the navigation goal!"
-        print(f"[INFO] Goal successfully accepted by Nav2 bt_navigator: ({goal_x:.2f}, {goal_y:.2f}) [frame=map]")
+        logger.info(f"Goal successfully accepted by Nav2 bt_navigator: ({goal_x:.2f}, {goal_y:.2f}) [frame=map]")
         state_publisher.publish_goal_pose(x=goal_x, y=goal_y, heading=goal_heading, frame_id="map")
 
         # 10. Autonomous Navigation Loop
-        print("[INFO] Entering closed-loop navigation loop...")
+        logger.info("Entering closed-loop navigation loop...")
         nav_start_time = time.time()
         start_x, start_y, _ = env.get_robot_pose_w(0)
         max_traveled = 0.0
@@ -290,7 +294,7 @@ def run_nav2_verification():
             if nav2_proc.poll() is not None:
                 log_file.flush()
                 with open(log_file_path, "r") as f:
-                    print(f"[ERROR] Nav2 process died:\n{f.read()[-2000:]}")
+                    logger.error(f"Nav2 process died:\n{f.read()[-2000:]}")
                 assert False, "Nav2 process crashed during navigation."
 
             # Apply commanded actions to robot articulation (updated concurrently by background ROS 2 thread)
@@ -315,50 +319,46 @@ def run_nav2_verification():
                 latest_cmd = received_cmd_vels[-1] if len(received_cmd_vels) > 0 else Twist()
                 act = actions[0].cpu().tolist()
                 robot_joint_vel = env.scene["robot"].data.joint_vel[0].cpu().tolist()
-                print(f"[INFO] Step {step}: Traveled={traveled:.3f}m | DistToGoal={dist_to_goal:.3f}m | "
-                      f"AdapterAct=[v={act[0]:.2f}, w={act[1]:.2f}] | "
-                      f"CmdVel=[v={latest_cmd.linear.x:.2f}, w={latest_cmd.angular.z:.2f}] | "
-                      f"WheelVel={[round(v, 2) for v in robot_joint_vel[:2]]} | "
-                      f"Plans={len(received_plans)}")
+                logger.info(
+                    f"Step {step}: Traveled={traveled:.3f}m | DistToGoal={dist_to_goal:.3f}m | "
+                    f"AdapterAct=[v={act[0]:.2f}, w={act[1]:.2f}] | "
+                    f"CmdVel=[v={latest_cmd.linear.x:.2f}, w={latest_cmd.angular.z:.2f}] | "
+                    f"WheelVel={[round(v, 2) for v in robot_joint_vel[:2]]} | "
+                    f"Plans={len(received_plans)}"
+                )
 
             # Check goal reached
             if dist_to_goal < goal_threshold or env.is_goal_reached(0):
-                print("\n" + "=" * 70)
-                print(f"[SUCCESS] NAV2 AUTONOMOUS GOAL REACHED! (Final dist to goal: {dist_to_goal:.3f}m)")
-                print("=" * 70)
+                logger.success(f"NAV2 AUTONOMOUS GOAL REACHED! (Final dist to goal: {dist_to_goal:.3f}m)")
                 goal_reached = True
                 state_publisher.publish_goal_reached(True)
                 break
 
             if env.is_collision(0):
-                print(f"[WARN] Collision detected during navigation at step {step}!")
+                logger.warning(f"Collision detected during navigation at step {step}!")
 
         # 11. Assertions
-        print("\n" + "=" * 70)
-        print("RUNNING GOAL 3 VERIFICATION ASSERTIONS")
-        print("=" * 70)
+        logger.section("RUNNING GOAL 3 VERIFICATION ASSERTIONS")
 
-        print(f"[CHECK 1] Global costmap received: {len(received_costmaps)} updates -> [PASS]")
         assert len(received_costmaps) > 0, "No global costmap received from Nav2 map_server!"
+        logger.check("Global costmap received", len(received_costmaps) > 0, f"updates={len(received_costmaps)}")
 
-        print(f"[CHECK 2] Nav2 path plans received: {len(received_plans)} -> [PASS]")
         assert len(received_plans) > 0, "Nav2 planner failed to generate any global path plans!"
+        logger.check("Nav2 path plans received", len(received_plans) > 0, f"plans={len(received_plans)}")
 
-        print(f"[CHECK 3] Velocity commands received: {len(received_cmd_vels)} -> [PASS]")
         assert len(received_cmd_vels) > 0, "Nav2 controller failed to issue any /cmd_vel commands!"
+        logger.check("Velocity commands received", len(received_cmd_vels) > 0, f"cmd_vels={len(received_cmd_vels)}")
 
-        print(f"[CHECK 4] Maximum robot displacement: {max_traveled:.3f} m (threshold > 0.8m) -> [PASS]")
         assert max_traveled > 0.8, f"Robot traveled insufficient distance: {max_traveled:.3f}m"
+        logger.check("Maximum robot displacement (> 0.8m)", max_traveled > 0.8, f"max_traveled={max_traveled:.3f} m")
 
-        print(f"[CHECK 5] Autonomous navigation goal reached: {goal_reached} -> [PASS]")
         assert goal_reached, f"Robot failed to reach goal within {args_cli.max_steps} steps!"
+        logger.check("Autonomous navigation goal reached", goal_reached, f"final_dist={dist_to_goal:.3f} m")
 
-        print("\n" + "=" * 70)
-        print("GOAL 3 NAV2 BRINGUP & AUTONOMOUS NAVIGATION FULLY VERIFIED!")
-        print("=" * 70)
+        logger.section("GOAL 3 NAV2 BRINGUP & AUTONOMOUS NAVIGATION FULLY VERIFIED!")
 
     finally:
-        print("[INFO] Cleaning up Nav2 process and ROS 2 nodes...")
+        logger.info("Cleaning up Nav2 process and ROS 2 nodes...")
         if nav2_proc.poll() is None:
             try:
                 pgid = os.getpgid(nav2_proc.pid)
@@ -385,9 +385,7 @@ def main():
     try:
         run_nav2_verification()
     except Exception as e:
-        import traceback
-        print("[ERROR] Exception occurred during Nav2 verification:", file=sys.stderr)
-        traceback.print_exc()
+        logger.error(f"Exception occurred during Nav2 verification: {e}", exc_info=True)
         sys.exit(1)
     finally:
         simulation_app.close()

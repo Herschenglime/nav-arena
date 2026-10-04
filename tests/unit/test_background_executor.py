@@ -107,3 +107,41 @@ def test_executor_idempotent_start_shutdown(rclpy_context):
     assert not executor.is_spinning
 
     node.destroy_node()
+
+
+def test_executor_restart_cycle(rclpy_context):
+    """Test that BackgroundRos2Executor can be restarted after shutdown and process messages."""
+    rx = rclpy.create_node("test_restart_rx")
+    tx = rclpy.create_node("test_restart_tx")
+
+    received = []
+    rx.create_subscription(String, "/test_restart_topic", lambda m: received.append(m.data), 10)
+    pub = tx.create_publisher(String, "/test_restart_topic", 10)
+
+    executor = BackgroundRos2Executor(nodes=[rx])
+
+    # First run
+    executor.start()
+    assert executor.is_spinning
+    pub.publish(String(data="msg_1"))
+    t0 = time.time()
+    while time.time() - t0 < 1.0 and len(received) < 1:
+        time.sleep(0.01)
+    assert received == ["msg_1"]
+    executor.shutdown(timeout_sec=1.0)
+    assert not executor.is_spinning
+
+    # Second run (restart)
+    executor.start()
+    assert executor.is_spinning
+    pub.publish(String(data="msg_2"))
+    t0 = time.time()
+    while time.time() - t0 < 1.0 and len(received) < 2:
+        time.sleep(0.01)
+    assert received == ["msg_1", "msg_2"]
+    executor.shutdown(timeout_sec=1.0)
+    assert not executor.is_spinning
+
+    rx.destroy_node()
+    tx.destroy_node()
+

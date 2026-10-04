@@ -15,11 +15,18 @@ import time
 
 from isaaclab.app import AppLauncher
 
+from nav_arena.utils import add_logger_args, configure_logging, get_logger
+
+logger = get_logger("verify_tf_tree")
+
 # 1. Parse arguments
 parser = argparse.ArgumentParser(description="Verify ROS 2 TF Tree and robot_state_publisher.")
 parser.add_argument("--num-steps", type=int, default=60, help="Number of simulation steps to run.")
+add_logger_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
+
+configure_logging(args_cli.log_level)
 
 # 2. Mandatory boot-time flag injection for OmniGraph and ROS 2 bridges
 sys.argv.extend([
@@ -67,14 +74,14 @@ class TFVerifySceneCfg(InteractiveSceneCfg):
 
 
 def run_tf_verification():
-    print("=" * 70)
-    print("VERIFYING ROS 2 TF TREE & ROBOT_STATE_PUBLISHER")
-    print("=" * 70)
+    logger.section("VERIFYING ROS 2 TF TREE & ROBOT_STATE_PUBLISHER")
 
     embodiment_cfg = NovaCarterEmbodimentCfg()
-    print(f"[INFO] Embodiment Config: base_frame='{embodiment_cfg.base_frame}', "
-          f"chassis_frame='{embodiment_cfg.chassis_frame}', lidar_frame='{embodiment_cfg.lidar_frame}'")
-    print(f"[INFO] LiDAR Offset: {embodiment_cfg.lidar_offset} m")
+    logger.info(
+        f"Embodiment Config: base_frame='{embodiment_cfg.base_frame}', "
+        f"chassis_frame='{embodiment_cfg.chassis_frame}', lidar_frame='{embodiment_cfg.lidar_frame}'"
+    )
+    logger.info(f"LiDAR Offset: {embodiment_cfg.lidar_offset} m")
 
     executor = None
 
@@ -95,7 +102,7 @@ def run_tf_verification():
         f"robot_radius:={embodiment_cfg.robot_radius}",
         f"robot_height:={embodiment_cfg.robot_height}",
     ]
-    print(f"[INFO] Starting robot_state_publisher process: {' '.join(launch_cmd)}")
+    logger.info(f"Starting robot_state_publisher process: {' '.join(launch_cmd)}")
     rsp_proc = subprocess.Popen(launch_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
     # 5. Initialize Isaac Lab simulation context and scene
@@ -105,7 +112,7 @@ def run_tf_verification():
     scene = InteractiveScene(scene_cfg)
 
     # 6. Initialize ROS 2 OmniGraph Bridge (Clock, Odometry, and TF)
-    print("[INFO] Constructing ROS 2 OmniGraph Bridge...")
+    logger.info("Constructing ROS 2 OmniGraph Bridge...")
     build_ros2_omnigraph(
         robot_prim_path="/World/envs/env_0/Robot/chassis_link",
         base_frame=embodiment_cfg.base_frame,
@@ -136,43 +143,46 @@ def run_tf_verification():
 
     executor = BackgroundRos2Executor(nodes=[listener_node])
     executor.start()
-    print("[INFO] BackgroundRos2Executor started for listener_node.")
-
-    print(f"[INFO] Stepping simulation for {args_cli.num_steps} steps...")
-    start_wall_time = time.time()
-    for step in range(args_cli.num_steps):
-        scene.write_data_to_sim()
-        sim.step()
-        scene.update(dt=sim.get_physics_dt())
-        simulation_app.update()
-
-    print(f"[INFO] Simulation stepped {args_cli.num_steps} iterations in {time.time() - start_wall_time:.2f}s.")
-
-    # Allow tf buffer to settle
-    time.sleep(0.5)
+    logger.info("BackgroundRos2Executor started for listener_node.")
 
     try:
+        logger.info(f"Stepping simulation for {args_cli.num_steps} steps...")
+        start_wall_time = time.time()
+        for step in range(args_cli.num_steps):
+            scene.write_data_to_sim()
+            sim.step()
+            scene.update(dt=sim.get_physics_dt())
+            simulation_app.update()
+
+        logger.info(f"Simulation stepped {args_cli.num_steps} iterations in {time.time() - start_wall_time:.2f}s.")
+
+        # Allow tf buffer to settle
+        time.sleep(0.5)
+
         # 8. Assertions
-        print("\n" + "=" * 70)
-        print("RUNNING TF TREE ASSERTIONS")
-        print("=" * 70)
+        logger.section("RUNNING TF TREE ASSERTIONS")
 
         # Assertion 1: Clock publishing
-        print(f"[CHECK 1] Received {len(received_clocks)} /clock messages...")
         assert len(received_clocks) > 0, "No /clock messages received from OmniGraph ROS2PublishClock!"
         latest_clock = received_clocks[-1].clock.sec + received_clocks[-1].clock.nanosec * 1e-9
-        print(f"          Latest sim time: {latest_clock:.3f} s -> [PASS]")
+        logger.check(
+            "Clock messages received",
+            len(received_clocks) > 0,
+            f"count={len(received_clocks)}, latest sim time={latest_clock:.3f} s",
+        )
 
         # Assertion 2: /robot_description published
-        print(f"[CHECK 2] Received {len(received_descriptions)} /robot_description messages...")
         assert len(received_descriptions) > 0, "No /robot_description message received from robot_state_publisher!"
         urdf_text = received_descriptions[-1]
         assert "<robot name=\"nova_carter\"" in urdf_text, "robot_description does not contain expected robot name!"
         assert f"link name=\"{embodiment_cfg.lidar_frame}\"" in urdf_text, f"Missing link '{embodiment_cfg.lidar_frame}' in URDF!"
-        print("          URDF contents verified -> [PASS]")
+        logger.check(
+            "URDF contents verified",
+            True,
+            f"messages={len(received_descriptions)}",
+        )
 
         # Assertion 3: Static TF base_link -> chassis_link
-        print(f"[CHECK 3] Querying static TF '{embodiment_cfg.base_frame}' -> '{embodiment_cfg.chassis_frame}'...")
         can_transform_base_chassis = tf_buffer.can_transform(
             embodiment_cfg.base_frame,
             embodiment_cfg.chassis_frame,
@@ -184,12 +194,13 @@ def run_tf_verification():
             embodiment_cfg.chassis_frame,
             rclpy.time.Time(),
         )
-        print(f"          Translation: ({t_base_chassis.transform.translation.x:.3f}, "
-              f"{t_base_chassis.transform.translation.y:.3f}, "
-              f"{t_base_chassis.transform.translation.z:.3f}) -> [PASS]")
+        logger.check(
+            f"Static TF '{embodiment_cfg.base_frame}' -> '{embodiment_cfg.chassis_frame}'",
+            can_transform_base_chassis,
+            f"translation=({t_base_chassis.transform.translation.x:.3f}, {t_base_chassis.transform.translation.y:.3f}, {t_base_chassis.transform.translation.z:.3f})",
+        )
 
         # Assertion 4: Static TF chassis_link -> lidar_link
-        print(f"[CHECK 4] Querying static TF '{embodiment_cfg.chassis_frame}' -> '{embodiment_cfg.lidar_frame}'...")
         can_transform_chassis_lidar = tf_buffer.can_transform(
             embodiment_cfg.chassis_frame,
             embodiment_cfg.lidar_frame,
@@ -202,12 +213,14 @@ def run_tf_verification():
             rclpy.time.Time(),
         )
         lidar_z = t_chassis_lidar.transform.translation.z
-        print(f"          LiDAR Z Offset: {lidar_z:.3f} m (expected {embodiment_cfg.lidar_offset[2]:.3f} m)")
         assert abs(lidar_z - embodiment_cfg.lidar_offset[2]) < 1e-4, f"LiDAR Z offset mismatch: {lidar_z}"
-        print("          Static LiDAR TF verified -> [PASS]")
+        logger.check(
+            f"Static TF '{embodiment_cfg.chassis_frame}' -> '{embodiment_cfg.lidar_frame}'",
+            True,
+            f"lidar_z={lidar_z:.3f} m (expected {embodiment_cfg.lidar_offset[2]:.3f} m)",
+        )
 
         # Assertion 5: Dynamic TF odom -> base_link
-        print(f"[CHECK 5] Querying dynamic TF 'odom' -> '{embodiment_cfg.base_frame}'...")
         can_transform_odom_base = tf_buffer.can_transform(
             "odom",
             embodiment_cfg.base_frame,
@@ -219,12 +232,13 @@ def run_tf_verification():
             embodiment_cfg.base_frame,
             rclpy.time.Time(),
         )
-        print(f"          Odom->Base Translation: ({t_odom_base.transform.translation.x:.3f}, "
-              f"{t_odom_base.transform.translation.y:.3f}, "
-              f"{t_odom_base.transform.translation.z:.3f}) -> [PASS]")
+        logger.check(
+            f"Dynamic TF 'odom' -> '{embodiment_cfg.base_frame}'",
+            can_transform_odom_base,
+            f"translation=({t_odom_base.transform.translation.x:.3f}, {t_odom_base.transform.translation.y:.3f}, {t_odom_base.transform.translation.z:.3f})",
+        )
 
         # Assertion 6: Full chain lookup odom -> lidar_link
-        print(f"[CHECK 6] Full chain lookup 'odom' -> '{embodiment_cfg.lidar_frame}'...")
         can_transform_odom_lidar = tf_buffer.can_transform(
             "odom",
             embodiment_cfg.lidar_frame,
@@ -237,15 +251,17 @@ def run_tf_verification():
             rclpy.time.Time(),
         )
         total_z = t_odom_lidar.transform.translation.z
-        print(f"          Total LiDAR height in odom frame: {total_z:.3f} m -> [PASS]")
+        logger.check(
+            f"Full chain lookup 'odom' -> '{embodiment_cfg.lidar_frame}'",
+            can_transform_odom_lidar,
+            f"total height={total_z:.3f} m",
+        )
 
-        print("\n" + "=" * 70)
-        print("ALL TF TREE & ROBOT_STATE_PUBLISHER ASSERTIONS PASSED SUCCESSFULLY!")
-        print("=" * 70)
+        logger.section("ALL TF TREE & ROBOT_STATE_PUBLISHER ASSERTIONS PASSED SUCCESSFULLY!")
 
     finally:
         # Clean teardown
-        print("[INFO] Cleaning up processes and ROS nodes...")
+        logger.info("Cleaning up processes and ROS nodes...")
         if executor is not None:
             executor.shutdown()
         listener_node.destroy_node()
@@ -262,9 +278,7 @@ def main():
     try:
         run_tf_verification()
     except Exception as e:
-        import traceback
-        print("[ERROR] Exception occurred during TF verification:", file=sys.stderr)
-        traceback.print_exc()
+        logger.error(f"Exception occurred during TF verification: {e}", exc_info=True)
         sys.exit(1)
     finally:
         simulation_app.close()

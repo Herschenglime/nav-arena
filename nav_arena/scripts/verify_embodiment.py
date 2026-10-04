@@ -13,11 +13,18 @@ import torch
 
 from isaaclab.app import AppLauncher
 
+from nav_arena.utils import add_logger_args, configure_logging, get_logger
+
+logger = get_logger("verify_embodiment")
+
 # Parse arguments
 parser = argparse.ArgumentParser(description="Verify Nova Carter embodiment and ActionManager.")
 parser.add_argument("--loop", action="store_true", help="Keep simulation running in a loop for livestream verification.")
+add_logger_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
+
+configure_logging(args_cli.log_level)
 
 # Inject boot-time extension flags for OmniGraph USD schemas and livestreaming
 sys.argv.extend([
@@ -92,11 +99,12 @@ class EmbodimentActionCfg:
 
 
 def run_verification():
-    print("[INFO] Creating SimulationContext...")
+    logger.section("VERIFYING NOVA CARTER EMBODIMENT & SENSORS")
+    logger.info("Creating SimulationContext...")
     sim_cfg = sim_utils.SimulationCfg(dt=0.01)
     sim = sim_utils.SimulationContext(sim_cfg)
 
-    print("[INFO] Setting up verification scene...")
+    logger.info("Setting up verification scene...")
     scene_cfg = EmbodimentVerifySceneCfg(num_envs=1, env_spacing=2.0)
     scene = InteractiveScene(scene_cfg)
 
@@ -113,11 +121,10 @@ def run_verification():
     )
 
     # Initialize ROS 2 OmniGraph bridge before starting simulation timeline
-    print("[INFO] Initializing ROS 2 OmniGraph bridge...")
+    logger.info("Initializing ROS 2 OmniGraph bridge...")
     build_ros2_omnigraph(
         robot_prim_path="/World/envs/env_0/Robot/chassis_link",
     )
-
 
     # Reset simulator to initialize physics views and start playback
     sim.reset()
@@ -132,10 +139,10 @@ def run_verification():
     sim.set_camera_view(eye=[2.5, -2.5, 1.8], target=[0.0, 0.0, 0.3])
 
     init_pos_x = robot.data.root_pos_w[0, 0].item()
-    print(f"[INFO] Initial robot X position: {init_pos_x:.4f} m")
+    logger.info(f"Initial robot X position: {init_pos_x:.4f} m")
 
     if args_cli.loop:
-        print("[INFO] Running in continuous loop for livestream inspection. Press Ctrl+C to terminate.")
+        logger.info("Running in continuous loop for livestream inspection. Press Ctrl+C to terminate.")
         step = 0
         while simulation_app.is_running():
             # Alternate maneuvers: Forward, Spin Left, Reverse, Spin Right
@@ -161,12 +168,11 @@ def run_verification():
             step += 1
         return
 
-
     # Standard non-loop test run
     # Test driving forward with linear vel = 0.5 m/s, angular vel = 0.0 rad/s
     action = torch.tensor([[0.5, 0.0]], device=sim.device)
 
-    print("[INFO] Stepping simulation with action [v=0.5 m/s, w=0.0 rad/s] for 60 steps...")
+    logger.info("Stepping simulation with action [v=0.5 m/s, w=0.0 rad/s] for 60 steps...")
     for step in range(60):
         # Process and apply action through ActionManager
         action_manager.process_action(action)
@@ -179,38 +185,30 @@ def run_verification():
 
     final_pos_x = robot.data.root_pos_w[0, 0].item()
     displacement_x = final_pos_x - init_pos_x
-    print(f"[INFO] Final robot X position: {final_pos_x:.4f} m (displacement: {displacement_x:.4f} m)")
+    logger.info(f"Final robot X position: {final_pos_x:.4f} m (displacement: {displacement_x:.4f} m)")
 
     # Check that robot actually moved forward
     assert displacement_x > 0.05, f"Robot failed to drive forward: displacement was {displacement_x:.4f} m"
-    print("[SUCCESS] DifferentialDriveAction correctly commanded the wheel joints!")
+    logger.check("DifferentialDriveAction commanded wheel joints", displacement_x > 0.05, f"displacement={displacement_x:.4f} m")
 
     # Check that LiDAR sensor updated
     ray_hits = lidar.data.ray_hits_w
-    print(f"[INFO] RayCaster data shape: {ray_hits.shape}")
+    logger.info(f"RayCaster data shape: {ray_hits.shape}")
     assert ray_hits is not None and ray_hits.numel() > 0, "RayCaster returned empty data!"
-    print("[SUCCESS] RayCaster 2D LiDAR generated valid ray hit tensors!")
+    logger.check("RayCaster 2D LiDAR generated valid ray hits", ray_hits is not None and ray_hits.numel() > 0, f"shape={tuple(ray_hits.shape)}")
 
-    print("=" * 60)
-    print("PHASE 2 EMBODIMENT VERIFICATION PASSED SUCCESSFULLY!")
-    print("=" * 60)
-
+    logger.section("PHASE 2 EMBODIMENT VERIFICATION PASSED SUCCESSFULLY!")
 
 
 def main():
     try:
         run_verification()
     except Exception as e:
-        import traceback
-        print("[ERROR] Exception occurred during verification:", file=sys.stderr)
-        traceback.print_exc()
+        logger.error(f"Exception occurred during verification: {e}", exc_info=True)
     except BaseException as e:
-        import traceback
-        print(f"[ERROR] BaseException occurred: {type(e)}: {e}", file=sys.stderr)
-        traceback.print_exc()
+        logger.critical(f"BaseException occurred: {type(e)}: {e}", exc_info=True)
     finally:
         simulation_app.close()
-
 
 
 if __name__ == "__main__":

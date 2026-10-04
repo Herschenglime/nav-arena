@@ -16,6 +16,10 @@ import numpy as np
 from PIL import Image
 import yaml
 
+from nav_arena.utils import add_logger_args, configure_logging, get_logger
+
+logger = get_logger("map_generator")
+
 # Note: pxr and omni modules MUST only be imported after AppLauncher boots to avoid
 # Boost.Python converter collisions with pre-installed site-packages.
 Sdf = Usd = UsdGeom = UsdPhysics = None  # type: ignore
@@ -137,8 +141,8 @@ def compute_scene_bounds(
                 float(max_pt[1]) + padding,
             )
         else:
-            print(
-                f"[WARNING] Specified bounds_prim_path '{bounds_prim_path}' does not exist on stage. "
+            logger.warning(
+                f"Specified bounds_prim_path '{bounds_prim_path}' does not exist on stage. "
                 "Falling back to mesh bounds..."
             )
 
@@ -207,21 +211,21 @@ def generate_occupancy_map(
 
     # 0. Execute scene-specific stage conditioning hook if provided
     if stage_preprocessor is not None:
-        print("[INFO] Executing scene-specific stage preprocessor hook...")
+        logger.info("Executing scene-specific stage preprocessor hook...")
         stage_preprocessor(stage)
 
     # Validate and ensure stage units are in meters to prevent scale distortion
     meters_per_unit = UsdGeom.GetStageMetersPerUnit(stage)
     if abs(meters_per_unit - 1.0) >= 1e-6:
-        print(
-            f"[WARNING] Stage units are not meters (metersPerUnit={meters_per_unit}). "
+        logger.warning(
+            f"Stage units are not meters (metersPerUnit={meters_per_unit}). "
             "Setting stage metersPerUnit to 1.0 for meter-scale occupancy map generation."
         )
         UsdGeom.SetStageMetersPerUnit(stage, 1.0)
 
     # 1. Prepare static mesh collisions
     prepared_count = prepare_mesh_collisions(scene_prim_path)
-    print(f"[INFO] Prepared {prepared_count} collision meshes under '{scene_prim_path}'")
+    logger.info(f"Prepared {prepared_count} collision meshes under '{scene_prim_path}'")
 
     # 2. Compute scene bounds automatically
     min_x, min_y, max_x, max_y = compute_scene_bounds(
@@ -230,9 +234,9 @@ def generate_occupancy_map(
         z_min=z_min,
         z_max=z_max,
     )
-    print(f"[INFO] Computed scene bounds for '{scene_prim_path}':")
-    print(f"       X: [{min_x:.3f}, {max_x:.3f}], Y: [{min_y:.3f}, {max_y:.3f}] m")
-    print(f"       Z raycast slice: [{z_min:.3f}, {z_max:.3f}] m, cell size: {cell_size:.3f} m")
+    logger.info(f"Computed scene bounds for '{scene_prim_path}':")
+    logger.info(f"       X: [{min_x:.3f}, {max_x:.3f}], Y: [{min_y:.3f}, {max_y:.3f}] m")
+    logger.info(f"       Z raycast slice: [{z_min:.3f}, {z_max:.3f}] m, cell size: {cell_size:.3f} m")
 
     os.makedirs(output_dir, exist_ok=True)
 
@@ -254,7 +258,7 @@ def generate_occupancy_map(
         for _ in range(warmup_steps):
             app.update()
 
-        print("[INFO] Executing 2D occupancy raycast generation...")
+        logger.info("Executing 2D occupancy raycast generation...")
         om.generate()
         app.update()
 
@@ -265,7 +269,7 @@ def generate_occupancy_map(
         if width <= 0 or height <= 0:
             raise RuntimeError(f"Generated occupancy map has empty dimensions: ({width}, {height})")
 
-        print(f"[INFO] Raw occupancy map dimensions: {width} x {height} cells")
+        logger.info(f"Raw occupancy map dimensions: {width} x {height} cells")
 
         # Generate RGBA image representation:
         # Occupied (buffer==1.0): 0 (black)
@@ -286,7 +290,7 @@ def generate_occupancy_map(
         image_filename = "map.png"
         image_path = os.path.join(output_dir, image_filename)
         im_gray.save(image_path)
-        print(f"[INFO] Saved occupancy map image to: {image_path}")
+        logger.info(f"Saved occupancy map image to: {image_path}")
 
         # Compute bottom-left origin in world coordinates per NVIDIA omap specification
         # Under 180-deg rotation, bottom-left is top_right from compute_coordinates
@@ -307,7 +311,7 @@ def generate_occupancy_map(
         yaml_path = os.path.join(output_dir, "map.yaml")
         with open(yaml_path, "w") as f:
             yaml.dump(yaml_content, f, sort_keys=False)
-        print(f"[INFO] Saved occupancy map config to: {yaml_path}")
+        logger.info(f"Saved occupancy map config to: {yaml_path}")
 
         return os.path.abspath(yaml_path)
 
@@ -356,10 +360,10 @@ def get_occupancy_map(
     png_path = os.path.join(target_dir, "map.png")
 
     if not force_generate and os.path.isfile(yaml_path) and os.path.isfile(png_path):
-        print(f"[INFO] [CACHE HIT] Found cached occupancy map at: {yaml_path}")
+        logger.info(f"[CACHE HIT] Found cached occupancy map at: {yaml_path}")
         return os.path.abspath(yaml_path)
 
-    print(f"[INFO] [CACHE MISS] Generating occupancy map for '{scene_id}' ({target_dir})...")
+    logger.info(f"[CACHE MISS] Generating occupancy map for '{scene_id}' ({target_dir})...")
     generate_occupancy_map(
         scene_prim_path=scene_prim_path,
         bounds_prim_path=bounds_prim_path,
@@ -433,8 +437,11 @@ def main():
         action="store_true",
         help="Force map generation even if cached map already exists.",
     )
+    add_logger_args(parser)
     AppLauncher.add_app_launcher_args(parser)
     args_cli = parser.parse_args()
+
+    configure_logging(args_cli.log_level)
 
     # Mandatory boot-time extension flag for Isaac Sim Occupancy Map
     sys.argv.extend([
@@ -462,7 +469,7 @@ def main():
             usd_path = os.path.abspath(args_cli.scene) if os.path.isfile(args_cli.scene) else args_cli.scene
             scene_id = os.path.splitext(os.path.basename(usd_path))[0]
 
-        print(f"[INFO] Opening USD stage: {usd_path}")
+        logger.info(f"Opening USD stage: {usd_path}")
         omni.usd.get_context().open_stage(usd_path)
         stage = omni.usd.get_context().get_stage()
         if stage is None:
@@ -498,14 +505,10 @@ def main():
             stage_preprocessor=stage_preprocessor,
         )
 
-        print("=" * 70)
-        print(f"[SUCCESS] Occupancy map generated successfully: {yaml_path}")
-        print("=" * 70)
+        logger.section("Occupancy Map Generation Complete")
+        logger.success(f"Occupancy map generated successfully: {yaml_path}")
     except Exception as e:
-        import traceback
-
-        print(f"[ERROR] Exception during occupancy map generation: {e}", file=sys.stderr)
-        traceback.print_exc()
+        logger.error(f"Exception during occupancy map generation: {e}", exc_info=True)
         raise
     finally:
         simulation_app.close()

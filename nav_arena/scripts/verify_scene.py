@@ -13,12 +13,19 @@ import torch
 
 from isaaclab.app import AppLauncher
 
+from nav_arena.utils import add_logger_args, configure_logging, get_logger
+
+logger = get_logger("verify_scene")
+
 # Parse CLI arguments
 parser = argparse.ArgumentParser(description="Verify InteriorAgent scene loading and robot embodiment.")
 parser.add_argument("--scene", type=str, default="kujiale_0003", help="InteriorAgent scene ID or USD path.")
 parser.add_argument("--loop", action="store_true", help="Keep simulation running continuously for visual inspection.")
+add_logger_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
+
+configure_logging(args_cli.log_level)
 
 # Mandatory boot-time extension flags for OmniGraph schemas and ROS 2 bridge
 sys.argv.extend([
@@ -61,7 +68,8 @@ class EmbodimentActionCfg:
 
 
 def run_verification():
-    print(f"[INFO] Setting up SimulationContext with scene '{args_cli.scene}'...")
+    logger.section(f"INTERIORAGENT SCENE VERIFICATION: '{args_cli.scene}'")
+    logger.info(f"Setting up SimulationContext with scene '{args_cli.scene}'...")
     sim_cfg = sim_utils.SimulationCfg(dt=0.01)
     sim = sim_utils.SimulationContext(sim_cfg)
 
@@ -69,7 +77,7 @@ def run_verification():
     robot_pos = (0.0, -2.0, 0.25)
     robot_rot = (0.0, 0.0, 0.0, 1.0)
 
-    print(f"[INFO] Configuring InteriorAgent scene with robot at {robot_pos}...")
+    logger.info(f"Configuring InteriorAgent scene with robot at {robot_pos}...")
     scene_cfg = create_interior_agent_scene_cfg(
         scene_id_or_path=args_cli.scene,
         robot_spawn_pos=robot_pos,
@@ -77,7 +85,7 @@ def run_verification():
         num_envs=1,
     )
 
-    print("[INFO] Creating InteractiveScene...")
+    logger.info("Creating InteractiveScene...")
     scene = InteractiveScene(scene_cfg)
 
     import types
@@ -92,7 +100,7 @@ def run_verification():
     )
 
     # Initialize ROS 2 OmniGraph bridge before timeline playback
-    print("[INFO] Initializing ROS 2 OmniGraph bridge...")
+    logger.info("Initializing ROS 2 OmniGraph bridge...")
     build_ros2_omnigraph(
         robot_prim_path="/World/envs/env_0/Robot/chassis_link",
     )
@@ -114,10 +122,10 @@ def run_verification():
     init_pos_z = robot.data.root_pos_w[0, 2].item()
     init_pos_x = robot.data.root_pos_w[0, 0].item()
     init_pos_y = robot.data.root_pos_w[0, 1].item()
-    print(f"[INFO] Initial robot position: x={init_pos_x:.4f}, y={init_pos_y:.4f}, z={init_pos_z:.4f} m")
+    logger.info(f"Initial robot position: x={init_pos_x:.4f}, y={init_pos_y:.4f}, z={init_pos_z:.4f} m")
 
     if args_cli.loop:
-        print("[INFO] Running in continuous loop for visual inspection. Press Ctrl+C to terminate.")
+        logger.info("Running in continuous loop for visual inspection. Press Ctrl+C to terminate.")
         step = 0
         while simulation_app.is_running():
             phase = (step // 150) % 4
@@ -142,7 +150,7 @@ def run_verification():
         return
 
     # Non-loop automated verification run
-    print("[INFO] Stepping 60 steps to allow robot to settle onto floor geometry...")
+    logger.info("Stepping 60 steps to allow robot to settle onto floor geometry...")
     zero_action = torch.tensor([[0.0, 0.0]], device=sim.device)
     for _ in range(60):
         action_manager.process_action(zero_action)
@@ -152,14 +160,14 @@ def run_verification():
         scene.update(dt=sim.get_physics_dt())
 
     settled_pos_z = robot.data.root_pos_w[0, 2].item()
-    print(f"[INFO] Settled robot Z position: {settled_pos_z:.4f} m")
+    logger.info(f"Settled robot Z position: {settled_pos_z:.4f} m")
 
     # Robot must not fall through the floor into the abyss (e.g. z < -1.0)
     assert settled_pos_z > -0.5, f"Robot fell through the floor! Settled Z: {settled_pos_z:.4f} m"
-    print("[SUCCESS] Robot settled securely on the floor geometry (no fall-through)!")
+    logger.check("Robot settled securely on floor geometry", settled_pos_z > -0.5, f"settled_z={settled_pos_z:.4f} m")
 
     # Test driving forward inside the room
-    print("[INFO] Stepping 60 steps commanding forward velocity [v=0.4 m/s, w=0.0 rad/s]...")
+    logger.info("Stepping 60 steps commanding forward velocity [v=0.4 m/s, w=0.0 rad/s]...")
     fwd_action = torch.tensor([[0.4, 0.0]], device=sim.device)
     start_pos_x = robot.data.root_pos_w[0, 0].item()
     start_pos_y = robot.data.root_pos_w[0, 1].item()
@@ -174,37 +182,29 @@ def run_verification():
     final_pos_x = robot.data.root_pos_w[0, 0].item()
     final_pos_y = robot.data.root_pos_w[0, 1].item()
     displacement = ((final_pos_x - start_pos_x) ** 2 + (final_pos_y - start_pos_y) ** 2) ** 0.5
-    print(f"[INFO] Final robot position: ({final_pos_x:.4f}, {final_pos_y:.4f}), displacement: {displacement:.4f} m")
+    logger.info(f"Final robot position: ({final_pos_x:.4f}, {final_pos_y:.4f}), displacement: {displacement:.4f} m")
 
     assert displacement > 0.05, f"Robot failed to drive forward: displacement was {displacement:.4f} m"
-    print("[SUCCESS] Robot successfully navigated on the InteriorAgent floor!")
+    logger.check("Robot floor navigation displacement", displacement > 0.05, f"displacement={displacement:.4f} m")
 
     # Check LiDAR sensor
     if "lidar" in scene.keys():
         lidar = scene["lidar"]
         ray_hits = lidar.data.ray_hits_w
-        print(f"[INFO] LiDAR ray hits tensor shape: {ray_hits.shape}")
+        logger.info(f"LiDAR ray hits tensor shape: {ray_hits.shape}")
         assert ray_hits is not None and ray_hits.numel() > 0, "LiDAR returned empty ray hits!"
-        print("[SUCCESS] LiDAR sensor successfully cast rays against the scene!")
+        logger.check("LiDAR scene ray casting", ray_hits is not None and ray_hits.numel() > 0, f"shape={tuple(ray_hits.shape)}")
 
-    print("=" * 60)
-    print(f"PHASE 3 INTERIORAGENT SCENE VERIFICATION ('{args_cli.scene}') PASSED SUCCESSFULLY!")
-    print("=" * 60)
+    logger.section(f"PHASE 3 INTERIORAGENT SCENE VERIFICATION ('{args_cli.scene}') PASSED SUCCESSFULLY!")
 
 
 def main():
     try:
         run_verification()
     except Exception as e:
-        import traceback
-
-        print("[ERROR] Exception occurred during verification:", file=sys.stderr)
-        traceback.print_exc()
+        logger.error(f"Exception occurred during verification: {e}", exc_info=True)
     except BaseException as e:
-        import traceback
-
-        print(f"[ERROR] BaseException occurred: {type(e)}: {e}", file=sys.stderr)
-        traceback.print_exc()
+        logger.critical(f"BaseException occurred: {type(e)}: {e}", exc_info=True)
     finally:
         simulation_app.close()
 
