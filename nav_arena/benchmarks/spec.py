@@ -224,6 +224,58 @@ class RunSpec:
         return cls.from_dict(json.loads(json_str))
 
 
+def _is_finite_number(value: Any) -> bool:
+    return not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(value)
+
+
+def _check_text(name: str, value: Any, optional: bool = False) -> None:
+    if optional and value is None:
+        return
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{name} must be a non-empty string{' or None' if optional else ''}, got '{value}'")
+
+
+def _validate_method(spec: RunSpec) -> None:
+    if spec.method not in VALID_METHODS:
+        raise ValueError(f"Invalid method '{spec.method}'. Expected one of: {VALID_METHODS}")
+    if spec.method_family not in VALID_METHOD_FAMILIES:
+        raise ValueError(f"Invalid method_family '{spec.method_family}'. Expected one of: {VALID_METHOD_FAMILIES}")
+    expected_family = "ros2" if spec.method == "nav2" else "in_process"
+    if spec.method_family != expected_family:
+        raise ValueError(
+            f"Method '{spec.method}' requires method_family '{expected_family}', but got '{spec.method_family}'"
+        )
+
+
+def _validate_placement(spec: RunSpec) -> None:
+    _check_text("robot", spec.robot)
+    _check_text("scene", spec.scene)
+    _check_text("route", spec.route, optional=True)
+    validate_route_args(spec.route, spec.spawn, spec.goal)  # route / spawn / goal consistency
+
+    for name, point in (("spawn", spec.spawn), ("goal", spec.goal)):
+        if point is not None and (len(point) != 2 or not all(_is_finite_number(x) for x in point)):
+            raise ValueError(f"{name} must be a coordinate pair (x, y) of finite floats, got {point}")
+    if spec.spawn_yaw is not None and not _is_finite_number(spec.spawn_yaw):
+        raise ValueError(f"spawn_yaw must be a finite float, got {spec.spawn_yaw}")
+    if isinstance(spec.seed, bool) or not isinstance(spec.seed, int) or spec.seed < 0:
+        raise ValueError(f"seed must be a non-negative integer, got {spec.seed}")
+
+
+def _validate_limits(limits: Any) -> None:
+    if not isinstance(limits, EpisodeLimits):
+        raise ValueError(f"limits must be an EpisodeLimits instance, got {limits}")
+    steps = limits.max_steps
+    if isinstance(steps, bool) or not isinstance(steps, int) or steps <= 0:
+        raise ValueError(f"limits.max_steps must be a positive integer, got {steps}")
+    for name in ("goal_tolerance", "max_speed"):
+        value = getattr(limits, name)
+        if not _is_finite_number(value) or value <= 0:
+            raise ValueError(f"limits.{name} must be a positive finite float, got {value}")
+    if not _is_finite_number(limits.stall_timeout_s) or limits.stall_timeout_s < 0:
+        raise ValueError(f"limits.stall_timeout_s must be a non-negative finite float, got {limits.stall_timeout_s}")
+
+
 def validate_spec(spec: RunSpec) -> None:
     """Validate a RunSpec for consistency, valid method, bounds, and route parameters.
 
@@ -232,93 +284,9 @@ def validate_spec(spec: RunSpec) -> None:
     Raises:
         ValueError: If any field fails validation constraints.
     """
-    if spec.method not in VALID_METHODS:
-        raise ValueError(f"Invalid method '{spec.method}'. Expected one of: {VALID_METHODS}")
-
-    if spec.method_family not in VALID_METHOD_FAMILIES:
-        raise ValueError(
-            f"Invalid method_family '{spec.method_family}'. Expected one of: {VALID_METHOD_FAMILIES}"
-        )
-
-    expected_family = "ros2" if spec.method == "nav2" else "in_process"
-    if spec.method_family != expected_family:
-        raise ValueError(
-            f"Method '{spec.method}' requires method_family '{expected_family}', but got '{spec.method_family}'"
-        )
-
-    if not isinstance(spec.robot, str) or not spec.robot.strip():
-        raise ValueError(f"robot must be a non-empty string, got '{spec.robot}'")
-
-    if not isinstance(spec.scene, str) or not spec.scene.strip():
-        raise ValueError(f"scene must be a non-empty string, got '{spec.scene}'")
-
-    if spec.route is not None and (not isinstance(spec.route, str) or not spec.route.strip()):
-        raise ValueError(f"route must be a non-empty string or None, got '{spec.route}'")
-
-    # Route / spawn / goal consistency
-    validate_route_args(spec.route, spec.spawn, spec.goal)
-
-    if spec.spawn is not None:
-        if len(spec.spawn) != 2 or not all(
-            isinstance(x, (int, float)) and math.isfinite(x) for x in spec.spawn
-        ):
-            raise ValueError(f"spawn must be a coordinate pair (x, y) of finite floats, got {spec.spawn}")
-
-    if spec.goal is not None:
-        if len(spec.goal) != 2 or not all(
-            isinstance(x, (int, float)) and math.isfinite(x) for x in spec.goal
-        ):
-            raise ValueError(f"goal must be a coordinate pair (x, y) of finite floats, got {spec.goal}")
-
-    if spec.spawn_yaw is not None:
-        if (
-            isinstance(spec.spawn_yaw, bool)
-            or not isinstance(spec.spawn_yaw, (int, float))
-            or not math.isfinite(spec.spawn_yaw)
-        ):
-            raise ValueError(f"spawn_yaw must be a finite float, got {spec.spawn_yaw}")
-
-    if isinstance(spec.seed, bool) or not isinstance(spec.seed, int) or spec.seed < 0:
-        raise ValueError(f"seed must be a non-negative integer, got {spec.seed}")
-
-    # Limits validation (> 0 for steps/tolerance/speed, >= 0 for stall timeout)
-    if not isinstance(spec.limits, EpisodeLimits):
-        raise ValueError(f"limits must be an EpisodeLimits instance, got {spec.limits}")
-
-    if (
-        isinstance(spec.limits.max_steps, bool)
-        or not isinstance(spec.limits.max_steps, int)
-        or spec.limits.max_steps <= 0
-    ):
-        raise ValueError(f"limits.max_steps must be a positive integer, got {spec.limits.max_steps}")
-
-    if (
-        isinstance(spec.limits.goal_tolerance, bool)
-        or not isinstance(spec.limits.goal_tolerance, (int, float))
-        or not math.isfinite(spec.limits.goal_tolerance)
-        or spec.limits.goal_tolerance <= 0
-    ):
-        raise ValueError(
-            f"limits.goal_tolerance must be a positive finite float, got {spec.limits.goal_tolerance}"
-        )
-
-    if (
-        isinstance(spec.limits.max_speed, bool)
-        or not isinstance(spec.limits.max_speed, (int, float))
-        or not math.isfinite(spec.limits.max_speed)
-        or spec.limits.max_speed <= 0
-    ):
-        raise ValueError(f"limits.max_speed must be a positive finite float, got {spec.limits.max_speed}")
-
-    if (
-        isinstance(spec.limits.stall_timeout_s, bool)
-        or not isinstance(spec.limits.stall_timeout_s, (int, float))
-        or not math.isfinite(spec.limits.stall_timeout_s)
-        or spec.limits.stall_timeout_s < 0
-    ):
-        raise ValueError(
-            f"limits.stall_timeout_s must be a non-negative finite float, got {spec.limits.stall_timeout_s}"
-        )
+    _validate_method(spec)
+    _validate_placement(spec)
+    _validate_limits(spec.limits)
 
 
 _WARN_KEYS = ("robot", "scene")
