@@ -73,10 +73,11 @@ python -u nav_arena/nav_arena/scripts/verify_nav2.py --spawn-x -2.5 --spawn-y 0.
 ```
 
 ### Embodiment Verification
-Validates Nova Carter differential kinematics, exercises `DifferentialDriveAction`, reads 2D LiDAR range arrays, and validates displacement:
+Validates a registered embodiment's differential kinematics, exercises `DifferentialDriveAction`, reads 2D LiDAR range arrays, and validates displacement. `--robot` selects any registered embodiment (`nova_carter` by default, or `dingo`); `--camera` additionally mounts the RGB-D camera and checks the RGB / metric-depth tensors:
 ```bash
 source setup.env
 python -u nav_arena/nav_arena/scripts/verify_embodiment.py
+python -u nav_arena/nav_arena/scripts/verify_embodiment.py --robot dingo --camera
 ```
 
 ### Scene Verification (InteriorAgent)
@@ -195,7 +196,7 @@ nav_arena/
 │   │   ├── actions.py                 # DifferentialDriveActionCfg & ActionAdapter
 │   │   ├── kinematics.py              # Pure math differential drive kinematics (FK & IK)
 │   │   ├── nova_carter.py             # Nova Carter differential base configuration
-│   │   ├── sensors.py                 # Planar 2D LiDAR raycaster configuration
+│   │   ├── sensors.py                 # Planar 2D LiDAR raycaster and RGB-D pinhole camera configuration
 │   │   └── urdf.py                    # Programmatic URDF string synthesis
 │   ├── methods/                       # Autonomy baselines and external stacks
 │   │   └── nav2/                      # Nav2 bringup launch scripts, parameters, URDF bridge

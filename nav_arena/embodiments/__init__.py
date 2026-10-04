@@ -26,7 +26,14 @@ from .registry import (
     register_default_embodiments,
     register_embodiment,
 )
-from .sensors import SensorSuiteCfg, create_2d_lidar_cfg
+from .sensors import (
+    RGBD_CAMERA_DATA_TYPES,
+    SensorSuiteCfg,
+    create_2d_lidar_cfg,
+    create_embodiment_camera_cfg,
+    create_rgbd_camera_cfg,
+    pinhole_intrinsics,
+)
 from .urdf import generate_minimal_urdf
 
 __all__ = [
@@ -48,6 +55,10 @@ __all__ = [
     "DingoEmbodimentCfg",
     "dingo_stage_patch",
     "SensorSuiteCfg",
+    "RGBD_CAMERA_DATA_TYPES",
     "create_2d_lidar_cfg",
+    "create_rgbd_camera_cfg",
+    "create_embodiment_camera_cfg",
+    "pinhole_intrinsics",
     "generate_minimal_urdf",
 ]
