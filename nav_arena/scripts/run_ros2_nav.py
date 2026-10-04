@@ -43,6 +43,7 @@ _carb_settings.set("/app/livestream/allowResize", True)
 _carb_settings.set("/exts/omni.kit.livestream.app/primaryStream/allowDynamicResize", True)
 
 from nav_arena.tasks import PointNavTask, create_point_nav_env_cfg
+from nav_arena.ros2 import BackgroundRos2Executor
 from nav_arena.ros2.adapters.action_adapter import TwistActionAdapter
 from nav_arena.ros2.state_publisher import TaskStatePublisherNode
 from nav_arena.ros2.graph_builder import build_ros2_omnigraph
@@ -55,6 +56,11 @@ def main():
     print("=" * 70)
 
     # 3. Environment configuration
+    env = None
+    action_adapter = None
+    state_publisher = None
+    executor = None
+
     spawn_pos = (-2.5, 0.0, 0.25)
     spawn_rot = (0.0, 0.0, 0.0, 1.0)
     goal_pos = (-1.0, 0.0)
@@ -117,6 +123,11 @@ def main():
     goal_x, goal_y, goal_heading = env.get_goal_pose_w(0)
     state_publisher.publish_goal_pose(x=goal_x, y=goal_y, heading=goal_heading, frame_id="map")
     print(f"[INFO] Goal published to /goal_pose (frame=map): ({goal_x:.2f}, {goal_y:.2f}, heading={goal_heading:.2f})")
+
+    # Spin ROS 2 nodes on a dedicated background thread to prevent callback starvation under render load
+    executor = BackgroundRos2Executor(nodes=[action_adapter, state_publisher])
+    executor.start()
+    print("[INFO] BackgroundRos2Executor running on dedicated thread.")
     print("[INFO] Bridge ready. Listening on /cmd_vel and publishing /clock, /tf, /odom, /goal_pose, /goal_reached.")
 
     # 7. Main execution loop
@@ -124,10 +135,6 @@ def main():
     start_wall_time = time.time()
     try:
         while simulation_app.is_running():
-            # Process incoming ROS 2 messages
-            rclpy.spin_once(action_adapter, timeout_sec=0.0)
-            rclpy.spin_once(state_publisher, timeout_sec=0.0)
-
             # Ingest action and advance simulation
             actions = action_adapter.get_action()
             obs, rewards, dones, timeouts, infos = env.step(actions)
@@ -167,10 +174,16 @@ def main():
 
     finally:
         print("[INFO] Cleaning up ROS 2 and simulation resources...")
-        action_adapter.destroy_node()
-        state_publisher.destroy_node()
-        rclpy.shutdown()
-        env.close()
+        if executor is not None:
+            executor.shutdown()
+        if action_adapter is not None:
+            action_adapter.destroy_node()
+        if state_publisher is not None:
+            state_publisher.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+        if env is not None:
+            env.close()
         simulation_app.close()
         print("[INFO] Simulation bridge terminated.")
 

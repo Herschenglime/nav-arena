@@ -51,7 +51,7 @@ from nav_arena.embodiments import (
     NOVA_CARTER_CFG,
     NovaCarterEmbodimentCfg,
 )
-from nav_arena.ros2 import build_ros2_omnigraph
+from nav_arena.ros2 import BackgroundRos2Executor, build_ros2_omnigraph
 
 
 @configclass
@@ -75,6 +75,8 @@ def run_tf_verification():
     print(f"[INFO] Embodiment Config: base_frame='{embodiment_cfg.base_frame}', "
           f"chassis_frame='{embodiment_cfg.chassis_frame}', lidar_frame='{embodiment_cfg.lidar_frame}'")
     print(f"[INFO] LiDAR Offset: {embodiment_cfg.lidar_offset} m")
+
+    executor = None
 
     # 4. Launch robot_state_publisher via ROS 2 launch file
     launch_file_path = os.path.abspath("nav_arena/nav_arena/methods/nav2/launch/robot_description.launch.py")
@@ -132,6 +134,10 @@ def run_tf_verification():
     tf_buffer = tf2_ros.Buffer()
     tf_listener = tf2_ros.TransformListener(tf_buffer, listener_node)
 
+    executor = BackgroundRos2Executor(nodes=[listener_node])
+    executor.start()
+    print("[INFO] BackgroundRos2Executor started for listener_node.")
+
     print(f"[INFO] Stepping simulation for {args_cli.num_steps} steps...")
     start_wall_time = time.time()
     for step in range(args_cli.num_steps):
@@ -140,14 +146,10 @@ def run_tf_verification():
         scene.update(dt=sim.get_physics_dt())
         simulation_app.update()
 
-        # Spin rclpy to process incoming clock, tf, and tf_static messages
-        rclpy.spin_once(listener_node, timeout_sec=0.01)
-
     print(f"[INFO] Simulation stepped {args_cli.num_steps} iterations in {time.time() - start_wall_time:.2f}s.")
 
-    # Additional spin to allow tf buffer to settle
-    for _ in range(20):
-        rclpy.spin_once(listener_node, timeout_sec=0.05)
+    # Allow tf buffer to settle
+    time.sleep(0.5)
 
     try:
         # 8. Assertions
@@ -244,6 +246,8 @@ def run_tf_verification():
     finally:
         # Clean teardown
         print("[INFO] Cleaning up processes and ROS nodes...")
+        if executor is not None:
+            executor.shutdown()
         listener_node.destroy_node()
         rclpy.shutdown()
         if rsp_proc.poll() is None:

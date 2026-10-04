@@ -5,10 +5,12 @@
 
 """ROS 2 bridge components for simulation interaction."""
 
+from .executor import BackgroundRos2Executor
 from .sensors import LaserScanPublisherNode
 from .state_publisher import TaskStatePublisherNode
 
 __all__ = [
+    "BackgroundRos2Executor",
     "LaserScanPublisherNode",
     "TaskStatePublisherNode",
     "build_ros2_omnigraph",

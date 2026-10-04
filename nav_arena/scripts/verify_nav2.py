@@ -60,7 +60,12 @@ from rclpy.action import ActionClient
 from rosgraph_msgs.msg import Clock
 
 import omni.usd
-from nav_arena.ros2 import LaserScanPublisherNode, TaskStatePublisherNode, build_ros2_omnigraph
+from nav_arena.ros2 import (
+    BackgroundRos2Executor,
+    LaserScanPublisherNode,
+    TaskStatePublisherNode,
+    build_ros2_omnigraph,
+)
 from nav_arena.ros2.adapters.action_adapter import TwistActionAdapter
 from nav_arena.tasks import PointNavTask, create_point_nav_env_cfg
 
@@ -135,14 +140,8 @@ def run_nav2_verification():
     # NVIDIA standard lifecycle supervision: query bt_navigator/get_state
     lifecycle_client = test_node.create_client(GetState, "/bt_navigator/get_state")
 
-    executor = SingleThreadedExecutor()
-    executor.add_node(action_adapter)
-    executor.add_node(state_publisher)
-    executor.add_node(scan_publisher)
-    executor.add_node(test_node)
-
-    executor_thread = threading.Thread(target=executor.spin, daemon=True)
-    executor_thread.start()
+    executor = BackgroundRos2Executor(nodes=[action_adapter, state_publisher, scan_publisher, test_node])
+    executor.start()
 
     # Note: map -> odom transform is dynamically broadcast by AMCL in Nav2
 
@@ -372,8 +371,8 @@ def run_nav2_verification():
                     pass
             except Exception:
                 nav2_proc.terminate()
-        executor.shutdown()
-        executor_thread.join(timeout=2.0)
+        if executor is not None:
+            executor.shutdown()
         test_node.destroy_node()
         state_publisher.destroy_node()
         scan_publisher.destroy_node()
