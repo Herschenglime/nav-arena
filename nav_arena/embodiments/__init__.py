@@ -11,7 +11,6 @@ from .dingo import (
     DINGO_ACTION_CFG,
     DINGO_CFG,
     DingoEmbodimentCfg,
-    dingo_stage_patch,
 )
 from .kinematics import diff_drive_fk, diff_drive_ik
 from .nova_carter import (
@@ -54,7 +53,6 @@ __all__ = [
     "DINGO_CFG",
     "DINGO_ACTION_CFG",
     "DingoEmbodimentCfg",
-    "dingo_stage_patch",
     "SensorSuiteCfg",
     "RGBD_CAMERA_DATA_TYPES",
     "create_2d_lidar_cfg",

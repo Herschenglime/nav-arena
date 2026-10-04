@@ -139,8 +139,8 @@ def run_verification(simulation_app):
     scene_cfg = EmbodimentVerifySceneCfg(num_envs=1, env_spacing=2.0)
     scene = InteractiveScene(scene_cfg)
 
-    # Embodiment-specific stage fixes (e.g. Dingo caster friction) must land after the robot is
-    # spawned and before physics initializes in sim.reset().
+    # Embodiments whose USD needs runtime fixes (stage_patch_fn) must be patched after the robot is spawned and
+    # before physics initializes in sim.reset(). The Dingo's fixes are baked into its derived USD instead.
     if embodiment.stage_patch_fn is not None:
         embodiment.stage_patch_fn(get_current_stage())
         logger.info(f"Applied '{embodiment.name}' stage patch")

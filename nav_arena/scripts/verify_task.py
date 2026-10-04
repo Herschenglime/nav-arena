@@ -38,13 +38,13 @@ configure_logging(args_cli.log_level)
 
 
 
-def verify_dingo_stage_patch(task) -> None:
-    """Verify the Dingo caster friction fix and ground-plane removal landed on every robot instance."""
+def verify_dingo_usd_fixes(task) -> None:
+    """Verify the derived Dingo USD's caster friction fix and ground-plane removal reached the spawned robot."""
     stage = task.sim.stage
     caster = stage.GetPrimAtPath("/World/envs/env_0/Robot/PhysicsMaterials/caster_wheel")
     mode = caster.GetAttribute("physxMaterial:frictionCombineMode").Get() if caster.IsValid() else None
     logger.check("Caster friction combine mode is 'min'", mode == "min", f"mode={mode}")
-    assert mode == "min", f"Dingo caster friction patch missing (mode={mode})"
+    assert mode == "min", f"Dingo caster friction fix missing (mode={mode})"
     ground = stage.GetPrimAtPath("/World/envs/env_0/Robot/GroundPlane")
     ground_off = not ground.IsValid() or not ground.IsActive()
     logger.check("Dingo's embedded ground plane is deactivated", ground_off)
@@ -120,8 +120,8 @@ def run_verification():
     logger.info("Resetting environment...")
     obs, extras = task.reset()
 
-    if embodiment.stage_patch_fn is not None and args_cli.robot == "dingo":
-        verify_dingo_stage_patch(task)
+    if args_cli.robot == "dingo":
+        verify_dingo_usd_fixes(task)
     if args_cli.camera:
         verify_cameras(task)
 

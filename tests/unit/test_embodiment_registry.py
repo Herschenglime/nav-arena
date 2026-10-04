@@ -24,7 +24,6 @@ from nav_arena.embodiments import (
     NovaCarterEmbodimentCfg,
     RobotEmbodimentCfg,
     clear_registry,
-    dingo_stage_patch,
     generate_minimal_urdf,
     get_embodiment,
     list_embodiments,
@@ -95,7 +94,8 @@ def test_get_dingo_embodiment():
     assert cfg.camera_rot == (0.0, 0.0, 0.0, 1.0)
     assert cfg.robot_radius == 0.35
     assert cfg.robot_height == 0.30
-    assert cfg.stage_patch_fn is dingo_stage_patch
+    # Its fixes are baked into the derived USD, so no runtime stage patch is needed.
+    assert cfg.stage_patch_fn is None
     assert cfg.articulation_cfg is not None
     assert cfg.action_cfg is not None
     assert cfg.action_cfg.wheel_radius == 0.1225
@@ -150,80 +150,6 @@ def test_clear_registry_and_restore():
     register_default_embodiments()
     assert "nova_carter" in list_embodiments()
     assert "dingo" in list_embodiments()
-
-
-def _dingo_stage(*roots: str):
-    """Build an in-memory stage with one Dingo-like robot (ground plane + caster material) per root."""
-    from pxr import Usd
-
-    stage = Usd.Stage.CreateInMemory()
-    for root in roots:
-        stage.DefinePrim(f"{root}/GroundPlane", "Xform")
-        stage.DefinePrim(f"{root}/GroundPlane/CollisionPlane", "Plane")
-        stage.DefinePrim(f"{root}/PhysicsMaterials", "Scope")
-        stage.DefinePrim(f"{root}/PhysicsMaterials/caster_wheel", "Material")
-        stage.DefinePrim(f"{root}/PhysicsMaterials/driving_wheels", "Material")
-    return stage
-
-
-def _friction_combine(stage, path: str):
-    attr = stage.GetPrimAtPath(path).GetAttribute("physxMaterial:frictionCombineMode")
-    return attr.Get() if attr else None
-
-
-def test_dingo_stage_patch_single_robot():
-    """Verify the patch disables the embedded ground plane and sets caster friction combine to 'min'."""
-    stage = _dingo_stage("/World/Robot")
-    dingo_stage_patch(stage)
-
-    assert not stage.GetPrimAtPath("/World/Robot/GroundPlane").IsActive()
-    caster = stage.GetPrimAtPath("/World/Robot/PhysicsMaterials/caster_wheel")
-    assert _friction_combine(stage, "/World/Robot/PhysicsMaterials/caster_wheel") == "min"
-    assert "PhysxMaterialAPI" in caster.GetMetadata("apiSchemas").GetAddedOrExplicitItems()
-    # Only the caster is modified; the drive-wheel material keeps its default combine behavior.
-    assert _friction_combine(stage, "/World/Robot/PhysicsMaterials/driving_wheels") is None
-
-
-def test_dingo_stage_patch_cloned_envs_and_scene_floor():
-    """Verify cloned env robots are patched while unrelated scene ground planes stay active."""
-    stage = _dingo_stage("/World/envs/env_0/Robot", "/World/envs/env_1/Robot", "/dingo")
-    stage.DefinePrim("/World/defaultGroundPlane", "Xform")
-    stage.DefinePrim("/World/Scene/GroundPlane", "Xform")
-    dingo_stage_patch(stage)
-
-    for root in ("/World/envs/env_0/Robot", "/World/envs/env_1/Robot", "/dingo"):
-        assert not stage.GetPrimAtPath(f"{root}/GroundPlane").IsActive()
-        assert _friction_combine(stage, f"{root}/PhysicsMaterials/caster_wheel") == "min"
-    assert stage.GetPrimAtPath("/World/defaultGroundPlane").IsActive()
-    assert stage.GetPrimAtPath("/World/Scene/GroundPlane").IsActive()
-
-
-def test_dingo_stage_patch_is_idempotent_and_preserves_schemas():
-    """Verify re-applying the patch neither duplicates the API schema nor drops existing ones."""
-    from pxr import Sdf
-
-    stage = _dingo_stage("/World/Robot")
-    caster = stage.GetPrimAtPath("/World/Robot/PhysicsMaterials/caster_wheel")
-    existing = Sdf.TokenListOp()
-    existing.prependedItems = ["PhysicsMaterialAPI"]
-    caster.SetMetadata("apiSchemas", existing)
-
-    dingo_stage_patch(stage)
-    dingo_stage_patch(stage)
-
-    items = list(caster.GetMetadata("apiSchemas").GetAddedOrExplicitItems())
-    assert items.count("PhysxMaterialAPI") == 1
-    assert "PhysicsMaterialAPI" in items
-
-
-def test_dingo_stage_patch_fails_loudly_when_robot_missing():
-    """Verify a stage without a spawned Dingo raises instead of silently doing nothing."""
-    from pxr import Usd
-
-    with pytest.raises(RuntimeError, match="caster_wheel"):
-        dingo_stage_patch(Usd.Stage.CreateInMemory())
-    with pytest.raises(ValueError):
-        dingo_stage_patch(None)
 
 
 def test_register_embodiment_decorator():

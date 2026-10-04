@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from nav_arena.embodiments import dingo_stage_patch
+from nav_arena.embodiments import get_embodiment, register_embodiment
 from nav_arena.scenes import create_interior_agent_scene_cfg
 from nav_arena.tasks import PointNavTask, create_point_nav_env_cfg
 from nav_arena.tasks.point_nav import apply_embodiment_stage_patch, lateral_contact
@@ -49,7 +49,7 @@ def test_dingo_cfg_binds_embodiment(scene_usd):
     """Verify the Dingo config uses its USD, wheel geometry, base_link sensing, and lateral-force collisions."""
     cfg = _cfg(scene_usd, robot_name="dingo")
     assert cfg.robot_name == "dingo"
-    assert cfg.scene.robot.spawn.usd_path.endswith("dingo.usd")
+    assert "dingo_nav_arena_" in cfg.scene.robot.spawn.usd_path  # the derived asset
     assert cfg.actions.robot_action.wheel_radius == 0.1225
     assert cfg.actions.robot_action.asset_name == "robot"
     assert cfg.scene.contact_forces.prim_path == "{ENV_REGEX_NS}/Robot/base_link"
@@ -59,13 +59,26 @@ def test_dingo_cfg_binds_embodiment(scene_usd):
     assert cfg.terminations.collision.params["threshold"] == 1.0
 
 
-def test_dingo_stage_patch_runs_as_prestartup_event(scene_usd):
-    """Verify the Dingo patch is registered as a prestartup event and physics replication is disabled for it."""
+def test_dingo_needs_no_runtime_stage_patch(scene_usd):
+    """Verify the Dingo's fixes live in its derived USD, so there is no prestartup event and physics replication stays on."""
     cfg = _cfg(scene_usd, robot_name="dingo")
+    assert cfg.events.embodiment_stage_patch is None
+    assert cfg.scene.replicate_physics is True
+
+
+def test_embodiment_stage_patch_runs_as_prestartup_event(scene_usd):
+    """Verify an embodiment with a patch hook gets a prestartup event and physics replication is disabled for it."""
+    from dataclasses import replace
+
+    def patch(stage):  # pragma: no cover - never called here
+        pass
+
+    register_embodiment("patched_dingo", replace(get_embodiment("dingo"), stage_patch_fn=patch))
+    cfg = _cfg(scene_usd, robot_name="patched_dingo")
     event = cfg.events.embodiment_stage_patch
     assert event.mode == "prestartup"
     assert event.func is apply_embodiment_stage_patch
-    assert event.params["patch_fn"] is dingo_stage_patch
+    assert event.params["patch_fn"] is patch
     # Isaac Lab rejects prestartup events while physics replication is enabled.
     assert cfg.scene.replicate_physics is False
 
