@@ -456,6 +456,53 @@ def expand_sweep_matrix(spec: SweepSpec) -> list[PlannedRun]:
     return runs
 
 
+def _new_batch_id(spec_name: str, runs_root: Path) -> str:
+    """``<YYYYmmdd-HHMM>_<name>``, made unique if that directory already exists."""
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M")
+    candidate = f"{timestamp}_{spec_name}"
+    if (runs_root / candidate).exists():
+        candidate = f"{timestamp}{datetime.now().strftime('%S')}_{spec_name}"
+        counter = 1
+        while (runs_root / candidate).exists():
+            candidate = f"{timestamp}_{spec_name}_{counter}"
+            counter += 1
+    return candidate
+
+
+def _write_batch_yaml(batch_dir: Path, batch_id: str, spec: SweepSpec, created_at: str) -> None:
+    batch_info = {
+        "batch_id": batch_id,
+        "name": spec.name,
+        "created_at": created_at,
+        "started_at": created_at,
+        "ended_at": None,
+        "status": "running",
+        "git": get_git_info(PROJECT_ROOT),
+        "navdp": get_git_info(NAVDP_ROOT),
+        "host": get_host_info(),
+        "spec": spec.to_dict(),
+    }
+    (batch_dir / "batch.yaml").write_text(yaml.dump(batch_info, sort_keys=False), encoding="utf-8")
+
+
+def _queued_records(planned_runs: list[PlannedRun]) -> list[RunRecord]:
+    return [
+        RunRecord(
+            id=planned.run_id,
+            status=RunStatus.QUEUED,
+            method=planned.spec.method,
+            method_family=planned.spec.method_family,
+            method_params=planned.spec.method_params,
+            robot=planned.spec.robot,
+            scene=planned.spec.scene,
+            route=planned.route_label,
+            seed=planned.spec.seed,
+            run_dir=planned.run_id,
+        )
+        for planned in planned_runs
+    ]
+
+
 def setup_batch_directory(
     spec: SweepSpec,
     runs_dir: Path | None = None,
@@ -472,79 +519,28 @@ def setup_batch_directory(
         Tuple of (batch_dir, manifest, expanded_runs).
     """
     runs_root = runs_dir or RUNS_DIR
-    if batch_id is None:
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M")
-        candidate_id = f"{timestamp}_{spec.name}"
-        if (runs_root / candidate_id).exists():
-            sec_str = datetime.now().strftime("%S")
-            candidate_id = f"{timestamp}{sec_str}_{spec.name}"
-            counter = 1
-            while (runs_root / candidate_id).exists():
-                candidate_id = f"{timestamp}_{spec.name}_{counter}"
-                counter += 1
-        batch_id = candidate_id
-
+    batch_id = batch_id or _new_batch_id(spec.name, runs_root)
     batch_dir = runs_root / batch_id
     batch_dir.mkdir(parents=True, exist_ok=True)
 
-    expanded_runs = expand_sweep_matrix(spec)
-
-    # 1. Write batch.yaml
-    git_info = get_git_info(PROJECT_ROOT)
-    navdp_info = get_git_info(NAVDP_ROOT)
-    host_info = get_host_info()
+    planned_runs = expand_sweep_matrix(spec)
     created_at = _utcnow_iso()
-
-    batch_info = {
-        "batch_id": batch_id,
-        "name": spec.name,
-        "created_at": created_at,
-        "started_at": created_at,
-        "ended_at": None,
-        "status": "running",
-        "git": git_info,
-        "navdp": navdp_info,
-        "host": host_info,
-        "spec": spec.to_dict(),
-    }
-    batch_yaml_path = batch_dir / "batch.yaml"
-    batch_yaml_path.write_text(yaml.dump(batch_info, sort_keys=False), encoding="utf-8")
-
-    # 2. Initialize manifest.json with all runs in queued state
-    records: list[RunRecord] = []
-    for planned in expanded_runs:
-        run_id, r_spec = planned.run_id, planned.spec
-        records.append(
-            RunRecord(
-                id=run_id,
-                status=RunStatus.QUEUED,
-                method=r_spec.method,
-                method_family=r_spec.method_family,
-                method_params=r_spec.method_params,
-                robot=r_spec.robot,
-                scene=r_spec.scene,
-                route=planned.route_label,
-                seed=r_spec.seed,
-                run_dir=run_id,
-            )
-        )
+    _write_batch_yaml(batch_dir, batch_id, spec, created_at)
 
     manifest = BatchManifest(
         batch_id=batch_id,
-        runs=records,
+        runs=_queued_records(planned_runs),
         created_at=created_at,
         metadata={"name": spec.name, "scene": spec.scene},
     )
     manifest.save(batch_dir / "manifest.json")
 
-    # 3. Initialize empty results.csv with header
     csv_path = batch_dir / "results.csv"
     if not csv_path.is_file() or csv_path.stat().st_size == 0:
-        with csv_path.open("w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=RESULTS_CSV_COLUMNS)
-            writer.writeheader()
+        with csv_path.open("w", newline="", encoding="utf-8") as handle:
+            csv.DictWriter(handle, fieldnames=RESULTS_CSV_COLUMNS).writeheader()
 
-    return batch_dir, manifest, expanded_runs
+    return batch_dir, manifest, planned_runs
 
 
 def _update_batch_yaml(batch_dir: Path, **kwargs: Any) -> None:
