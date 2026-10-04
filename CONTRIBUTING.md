@@ -10,6 +10,8 @@ The codebase strictly enforces separation of concerns across nine dedicated modu
 
 ```text
 nav_arena/
+├── cli.py        # Main entry point (run, sweep, runs, doctor, routes, map) - ZERO simulator imports
+├── benchmarks/   # Unified benchmark engine: RunSpec, RunSession, worker, manifest, sweep, tracking, doctor
 ├── core/         # SimulationApp lifecycle & boot-time extension injection
 ├── embodiments/  # Robot kinematics, sensor configs, in-memory URDF synthesis (ZERO ROS 2 dependencies)
 ├── tasks/        # RL/benchmark environments (ManagerBasedRLEnv), MDP terms, episode resets
@@ -25,6 +27,15 @@ nav_arena/
 
 ### Module Responsibilities & Invariants
 
+- **`nav_arena.cli`**: Top-level command-line dispatcher for `run`, `sweep`, `runs`, `doctor`, `routes`, and `map`.
+  - **Fast Startup Invariant**: Strictly **ZERO simulator or ML imports** (`isaacsim`, `isaaclab`, `omni`, `pxr`, `rclpy`, `torch`). The CLI process only parses arguments, validates specs, and spawns isolated worker subprocesses via `managed_process`.
+- **`nav_arena.benchmarks`**: Evaluation harness and run tracking.
+  - **`spec.py`**: Pure, pre-boot `RunSpec` validation and CLI/YAML override resolution.
+  - **`session.py` & `worker.py`**: Subprocess isolation boundary for running simulation episodes.
+  - **`manifest.py`**: Atomic manifest tracking (`BatchManifest`) with crash-resilient `fsync` + replace file writes.
+  - **`sweep.py`**: Cartesian matrix planner and sequential execution loop with `--resume` support.
+  - **`tracking.py`**: Run indexing and metrics comparison (`results.csv`).
+  - **`doctor.py`**: Diagnostic environment and dependency auditor.
 - **`nav_arena.core`**: Handles `AppLauncher` bootstrapping. Only put initialization and lifecycle logic here; do not introduce robot or task domain logic.
 - **`nav_arena.embodiments`**: Defines physical properties, sensor mount points, and kinematic math.
   - **Critical Invariant**: Strictly **ZERO ROS 2 imports**. Embodiments must remain purely mathematical and Isaac Lab-native. All ROS 2 bridging belongs exclusively in `nav_arena.ros2`.
@@ -132,6 +143,7 @@ Each item below cost real debugging time; the "why" is the part to remember. How
 - **Fix assets statically, not at runtime.** Express USD fixes as a derived asset ([`embodiments/assets.py`](nav_arena/embodiments/assets.py)): a small layer sublayering the untouched upstream file. A runtime `stage_patch_fn` runs as a `prestartup` event, which Isaac Lab only allows with `replicate_physics=False` (replicated physics parses just `env_0`, so per-clone edits would be silently ignored); see the README's "Robot Assets and USD Fixes".
 - **`pxr.PhysxSchema` only exists inside Kit.** Author PhysX attributes as plain USD (`apiSchemas` metadata plus the attribute) so code works in CPU tests, and raise if the target prim is missing instead of silently skipping.
 - **Derived USDs must carry `metersPerUnit` and `upAxis`.** Sublayer metadata does not propagate to the referencing stage; a missing `metersPerUnit` silently rescales the robot.
+- **Lazy derived asset instantiation**: Derived asset configurations must be created via factory functions (e.g. `create_dingo_articulation_cfg()`) rather than module-level globals (`DINGO_CFG`). Eager USD generation during module imports breaks pure-Python tools and CPU unit tests before `AppLauncher` boots or when cache files are missing.
 - **Single-rigid-body robots (Dingo).** Colliders, caster and sensors all live on `base_link` (`body_link`), and the resting caster reads ~17.7 N on that link. `ground_contact_on_body=True` switches collision detection to lateral (XY) force; a plain force-norm check would terminate at t=0.
 - **Camera orientation.** Cameras use `convention="world"` (+X forward, +Z up) with the XYZW quaternion `(0, 0, 0, 1)`; copying a WXYZ quaternion from older Isaac Lab code rotates the camera.
 - **Occupancy maps are ROS-oriented**: image row 0 is the maximum y. Reading a map picture mirrored led to unsafe routes once.
@@ -151,7 +163,7 @@ Each item below cost real debugging time; the "why" is the part to remember. How
 **Lifecycle and processes**
 - **`launch_simulation_app` ends the process on exit.** `SimulationApp.close()` terminates it, so code after the `with` block never runs; return results by calling `sys.exit(n)` inside the block (an unhandled exception exits 1 with a logged traceback). Before this was fixed, every failure exited 0 and hid a failing integration test.
 - **One Isaac app per process**, so multi-run work needs one subprocess per run.
-- **Run directories use `mkdir(exist_ok=False)`** (second-resolution timestamps), so two runs started in the same second collide; give concurrent runs distinct `--output` paths.
+- **Run directories use random hex suffixes and `mkdir(parents=True, exist_ok=True)`**: Single runs default to `<timestamp>_<method>_<robot>_<route>_<hex4>` to avoid collisions even within the same second. The runner recorder allows `exist_ok=True` so that pre-created directories (e.g. prepared with `run_spec.json`) can be safely used.
 
 ---
 
@@ -161,7 +173,7 @@ All contributions must be accompanied by appropriate test coverage across the 3-
 
 | Tier | Directory | Scope | Target Runtime | Marker |
 |---|---|---|---|---|
-| **L1: Unit** | [`tests/unit/`](file:///home/robopi/simulation/nav_arena/tests/unit/) | Fast CPU-only algorithmic logic, math, URDF parsing, mock tests. | ~8 seconds (200+ tests) | `unit` (default) |
+| **L1: Unit** | [`tests/unit/`](file:///home/robopi/simulation/nav_arena/tests/unit/) | Fast CPU-only algorithmic logic, math, URDF parsing, mock tests. | ~11 seconds (410+ tests) | `unit` (default) |
 | **L2: ROS 2** | [`tests/ros2/`](file:///home/robopi/simulation/nav_arena/tests/ros2/) | Subprocess and ROS 2 middleware node interaction. | ~30 seconds | `@pytest.mark.ros2` |
 | **L3: Simulation** | [`tests/integration/`](file:///home/robopi/simulation/nav_arena/tests/integration/) | Full in-process or subprocess Isaac Sim PhysX and sensor tests. | ~30 seconds | `@pytest.mark.integration` |
 
@@ -185,9 +197,14 @@ All contributions must be accompanied by appropriate test coverage across the 3-
 - **User Instruction Format**: Always format execution commands for users as:
   ```bash
   source setup.env
+  nav_arena <subcommand> [args...]
+  ```
+  or for internal developer verification scripts:
+  ```bash
+  source setup.env
   python -u nav_arena/nav_arena/scripts/<script.py> [args...]
   ```
   Ensure all paths prepend `nav_arena/` when referencing internal package scripts.
 - **Agent Self-Execution**: In automated agent terminals, run `./agy_python.sh <script.py> [args...]` from `/home/robopi/simulation` to encapsulate `setup.env` and provide unbuffered stdout (`-u`).
 - **GPU etiquette**: Do not run Isaac jobs in the background while someone is using the GUI on the same machine: a long headless batch hung a live viewport (black screen). Check for running sessions first (`ps aux | grep -E 'verify_|isaaclab'`), and run integration tests (L3) only when the GPU is free.
-- **Interactive GUI**: Isaac Lab runs headless by default even if `--headless` is omitted (`--viz none`). To open the interactive viewport window on the user's active display, pass `--viz kit`.
+- **Interactive GUI**: Isaac Lab runs headless by default even if `--headless` is omitted (`--viz none`). To open the interactive viewport window on the user's active display, pass `--gui` in `nav_arena run` (or `--viz kit` in raw scripts).

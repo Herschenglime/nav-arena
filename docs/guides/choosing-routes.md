@@ -14,11 +14,16 @@ Everything below needs a cached 2D occupancy map of the scene. Check whether one
 ls nav_arena/cache/maps/            # one directory per scene, e.g. kujiale_0003/cs0.05_z0.01-0.60/{map.png,map.yaml}
 ```
 
-If your scene is missing, generate it (needs the simulator, headless is fine; it settles physics, raycasts a z-slice
-and writes `map.yaml` + `map.png`):
+If your scene is missing, generate it with `nav_arena map generate` (or the underlying tool `python -u -m nav_arena.tools.map_generator`; headless is fine, it settles physics, raycasts a z-slice, and writes `map.yaml` + `map.png`):
 
 ```bash
-python -u -m nav_arena.tools.map_generator --scene kujiale_0004
+nav_arena map generate --scene kujiale_0004
+```
+
+You can check whether a map is cached and view its dimensions with:
+
+```bash
+nav_arena map show --scene kujiale_0004
 ```
 
 | Flag | Meaning |
@@ -74,13 +79,17 @@ detouring the route needs). Rules of thumb:
 ## 4. Try a pair without committing it
 
 ```bash
+# Using the unified CLI
+nav_arena run --method iplanner --scene kujiale_0003 --spawn -6.4 0.5 --goal -0.4 0.5
+
+# Or via developer script
 python -u nav_arena/nav_arena/scripts/verify_baseline.py --method iplanner \
     --spawn -6.4 0.5 --goal -0.4 0.5
 ```
 
 `--spawn` and `--goal` must be given **together** (a custom start/goal is a pair); giving one alone, or combining them
 with `--route`, is a usage error, not silently ignored. `--spawn-yaw RAD` overrides the heading. The run is recorded
-under `cache/runs/<timestamp>_<method>_<robot>_custom/`.
+under `cache/runs/<timestamp>_<method>_<robot>_custom_<hex4>/`.
 
 ## 5. Make it a registered route
 
@@ -100,11 +109,19 @@ Route(
 Use the `path` length that `route_map` printed for `reference_path_m`. Then:
 
 1. Draw it with the others: `python -u -m nav_arena.tools.route_map --scene <scene>`.
-2. Run the route tests: `pytest -c nav_arena/pyproject.toml nav_arena/tests/unit/test_scene_routes.py -q`. They check
+2. Inspect registered routes using the CLI:
+   ```bash
+   nav_arena routes list --scene <scene>
+   nav_arena routes show to_pantry --scene <scene>
+   ```
+3. Run the route tests: `pytest -c nav_arena/pyproject.toml nav_arena/tests/unit/test_scene_routes.py -q`. They check
    that every route's endpoints have at least 0.5 m clearance and that reference paths are at least the straight-line
    distance. Note these tests read the `kujiale_0003` map and iterate that scene's routes only; for a new scene add the
    equivalent cases (and a map fixture for it) alongside.
-3. Try it: `verify_baseline.py --method iplanner --scene <scene> --route to_pantry`.
+4. Try it:
+   ```bash
+   nav_arena run --method iplanner --scene <scene> --route to_pantry
+   ```
 
 `get_route(name, scene)` raises a `KeyError` that lists the available routes, and `list_routes(scene)` lists names.
 Routes exist only for scenes in `INTERIOR_AGENT_ROUTES` (today `kujiale_0003`); a scene without routes can still be used

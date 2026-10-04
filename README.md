@@ -28,28 +28,37 @@ source setup.env
 pip install -e nav_arena
 ```
 
-> **Execution Rule for Users**: Always execute commands directly from `/home/robopi/simulation` using `source setup.env && python -u nav_arena/nav_arena/scripts/<script.py> [args...]`.
+> **Console Script**: Editable installation generates the `nav_arena` CLI console script in your environment. `python -m nav_arena` also works.
+> **Execution Rule for Users**: Always execute commands directly from `/home/robopi/simulation` using `source setup.env` before running `nav_arena <subcommand>` or `python -u nav_arena/nav_arena/scripts/<script.py> [args...]`.
 
 ### Common Quickstart Commands
 
 ```bash
 source setup.env
 
-# 1. Run the autonomous Nav2 navigation benchmark (headless)
+# 1. Inspect environment health, GPU, checkpoints, and map cache
+nav_arena doctor
+
+# 2. Run a single learned baseline episode (headless; completes in ~19s sim time)
+nav_arena run --method iplanner --robot dingo --scene kujiale_0003 --route hall_straight
+
+# 3. Run a learned baseline with interactive Omniverse Kit GUI
+nav_arena run --method iplanner --robot dingo --scene kujiale_0003 --route hall_straight --gui
+
+# 4. Run an autonomous Nav2 navigation benchmark (headless)
 python -u nav_arena/nav_arena/scripts/verify_nav2.py
 
-# 2. Run Nav2 benchmark with interactive Kit GUI and RViz2 visualization
+# 5. Run Nav2 benchmark with interactive Kit GUI and RViz2 visualization
 python -u nav_arena/nav_arena/scripts/verify_nav2.py --viz kit --rviz
 
-# 3. Inspect PointNav task execution interactively in Omniverse Kit
-python -u nav_arena/nav_arena/scripts/verify_task.py --viz kit
+# 6. Execute a batch matrix sweep across robots, methods, routes, and seeds
+nav_arena sweep sweeps/baselines_kujiale_0003.yaml --seeds 0,1,2
 
-# 4. Generate an offline 2D occupancy grid for scene kujiale_0003 (needed to draw or choose routes;
-#    see docs/guides/choosing-routes.md)
-python -u -m nav_arena.tools.map_generator --scene kujiale_0003 --cell-size 0.05
+# 7. List completed batches and standalone runs
+nav_arena runs list
 
-# 5. Run the fast CPU-only unit test suite (~8 s)
-pytest -c nav_arena/pyproject.toml nav_arena/tests/unit -v
+# 8. Run the fast CPU-only unit test suite (~11 s, 413 tests)
+pytest -c nav_arena/pyproject.toml nav_arena/tests/unit -q
 ```
 
 ### Learned Baseline Setup (NavDP family)
@@ -78,6 +87,40 @@ Checkpoints live in `NavDP/baselines/<planner>/checkpoints/`; their expected SHA
 
 All executable runners are located in [`nav_arena/nav_arena/scripts/`](file:///home/robopi/simulation/nav_arena/nav_arena/scripts/) and are launched from `/home/robopi/simulation`.
 
+### Unified `nav_arena` CLI
+
+The `nav_arena` CLI provides a standardized, method-agnostic interface for running episodes, executing matrix sweeps, and tracking benchmark outcomes. It guarantees fast startup (<0.15s) with zero simulator dependencies imported into the orchestrator process:
+
+```bash
+source setup.env
+
+# 1. Environment & diagnostic health audit
+nav_arena doctor
+
+# 2. Run a single baseline episode (headless by default)
+nav_arena run --method iplanner --robot dingo --scene kujiale_0003 --route hall_straight
+
+# 3. Run with interactive Omniverse Kit GUI on your active display
+nav_arena run --method iplanner --robot dingo --scene kujiale_0003 --route hall_straight --gui
+
+# 4. Execute a batch sweep matrix across robots, methods, routes, and seeds
+nav_arena sweep sweeps/baselines_kujiale_0003.yaml --seeds 0,1,2
+
+# 5. Resume an interrupted or partially completed sweep (skips finished runs)
+nav_arena sweep sweeps/baselines_kujiale_0003.yaml --resume
+
+# 6. Query runs and batches
+nav_arena runs list                         # overview table of batches and standalone runs
+nav_arena runs show <run-or-batch-id>       # detailed summary of metrics and outcomes
+nav_arena runs compare <batch-id> --by method # compare success rates, TTG, and path lengths
+nav_arena runs rerun <run-id>               # re-execute an episode with its saved spec
+
+# 7. Route and map utilities
+nav_arena routes list --scene kujiale_0003
+nav_arena routes show hall_straight
+nav_arena map show --scene kujiale_0003
+```
+
 ### Autonomous Nav2 Navigation Benchmark
 Launches Isaac Lab alongside the complete Nav2 autonomy stack (Map Server, AMCL, Costmaps, NavfnPlanner, DWBLocalPlanner, BT Navigator), publishes simulated LiDAR to `/scan`, synchronizes `/clock` and TF, and autonomously navigates the Nova Carter base to goal poses:
 ```bash
@@ -101,8 +144,8 @@ python -u nav_arena/nav_arena/scripts/verify_embodiment.py
 python -u nav_arena/nav_arena/scripts/verify_embodiment.py --robot dingo --camera
 ```
 
-### Learned Baseline Evaluation
-Runs one in-process navigation baseline (`iplanner`, `vint`, `navdp`, `viplanner`, `x_navdp`) closed-loop on a PointNav route, then reports time-to-goal, distance remaining, and the terminal cause (`goal_reached`, `collision`, `tipped`, `time_out`, `stalled` for no movement over `--stall-timeout`, or `max_steps`). It exits 0 only when the goal is reached (2 otherwise, 1 on errors). Setup: see [Learned Baseline Setup](#learned-baseline-setup-navdp-family).
+### Learned Baseline In-Process Verifier (Developer Shim)
+Runs one in-process navigation baseline (`iplanner`, `vint`, `navdp`, `viplanner`, `x_navdp`) closed-loop on a PointNav route in-process, sharing the core `nav_arena.benchmarks` library. For production benchmarking and run tracking, prefer `nav_arena run`.
 ```bash
 source setup.env
 
@@ -116,7 +159,7 @@ python -u nav_arena/nav_arena/scripts/verify_baseline.py --method navdp --route 
 python -u nav_arena/nav_arena/scripts/verify_baseline.py --method x_navdp --robot nova_carter \
     --spawn -6.4 0.5 --goal -0.4 0.5 --goal-dist 0.5 --policy-arg fear_threshold=0.5
 ```
-Each run writes `settings.json`, per-plan `steps.jsonl`, `summary.json`, and periodic RGB/depth snapshots to `cache/runs/<timestamp>_<method>_<robot>_<route>/` (override with `--output` or `NAV_ARENA_RUNS_DIR`).
+Each run writes `settings.json`, per-plan `steps.jsonl`, `summary.json`, `worker.log`, and periodic RGB/depth snapshots to `cache/runs/<timestamp>_<method>_<robot>_<route>_<hex>/` (override with `--output` or `NAV_ARENA_RUNS_DIR`).
 
 With `--viz kit` a third-person **follow camera** tracks the robot (`--no-follow-camera` to disable). Isaac Lab's goal arrow is hidden by default (`--show-goal-marker` to draw it) because it is real scene geometry that the policy's cameras see: depth planners treat it as an obstacle sitting on their own goal and stop short of it. Instead, `--viz kit` draws a **viewport-only overlay** (`--no-goal-overlay` to disable): a goal pin with a tolerance ring, plus the policy's current path (cyan while driving, red while it requests a stop). It is an `omni.ui.scene` layer over the viewport, not scene geometry, so it never appears in the robot's cameras (`isaacsim.util.debug_draw` was tried and measured to leak into camera RGB). An episode that makes no progress for `--stall-timeout` simulated seconds (default 10) ends as `stalled`; note that iPlanner/VIPlanner stop whenever predicted fear reaches the threshold and never resume on their own.
 
@@ -204,7 +247,7 @@ The test suite is organized into three distinct verification tiers:
 
 | Tier | Directory | Description | Typical Runtime | Target Environment |
 |---|---|---|---|---|
-| **L1: Unit Tests** | [`tests/unit/`](file:///home/robopi/simulation/nav_arena/tests/unit/) | Fast, CPU-only algorithmic & component tests (kinematics, LaserScan math, logger, process management, scene resolution, URDF synthesis, embodiment registry, sensor configs, paths, in-process policy adapters and path follower). | ~8 seconds (202 tests) | Pure Python / CPU |
+| **L1: Unit Tests** | [`tests/unit/`](file:///home/robopi/simulation/nav_arena/tests/unit/) | Fast, CPU-only algorithmic & component tests (kinematics, LaserScan math, logger, process management, scene resolution, URDF synthesis, embodiment registry, sensor configs, paths, in-process policy adapters, benchmark specs, atomic manifests, sweep planners, and tracking). | ~11 seconds (413 tests) | Pure Python / CPU |
 | **L2: ROS 2 Tests** | [`tests/ros2/`](file:///home/robopi/simulation/nav_arena/tests/ros2/) | Subprocess & ROS 2 middleware tests (Action adapters, OmniGraph builders, state publisher QoS, closed-loop driving). Marked with `@pytest.mark.ros2`. | ~30 seconds (4 tests) | ROS 2 Jazzy & Subprocess |
 | **L3: Simulation Tests** | [`tests/integration/`](file:///home/robopi/simulation/nav_arena/tests/integration/) | Isaac Sim tests run as headless subprocesses (occupancy grid generation, full `PointNavTask` stepping and resets, TF tree continuity, Dingo embodiment/camera/collision checks, and a full iPlanner episode). Marked with `@pytest.mark.integration`. | ~95 seconds (6 tests) | GPU / Isaac Sim PhysX |
 
@@ -214,7 +257,7 @@ The test suite is organized into three distinct verification tiers:
 source setup.env
 
 # 1. Run all L1 Unit Tests (fast CPU verification)
-pytest -c nav_arena/pyproject.toml nav_arena/tests/unit -v
+pytest -c nav_arena/pyproject.toml nav_arena/tests/unit -q
 
 # 2. Run L2 ROS 2 Integration Tests
 pytest -c nav_arena/pyproject.toml nav_arena/tests/ros2 -v
@@ -223,7 +266,7 @@ pytest -c nav_arena/pyproject.toml nav_arena/tests/ros2 -v
 pytest -c nav_arena/pyproject.toml nav_arena/tests/integration -v
 
 # 4. Run entire suite excluding heavy GPU simulation
-pytest -c nav_arena/pyproject.toml -m "not integration" -v
+pytest -c nav_arena/pyproject.toml -m "not integration" -q
 ```
 
 ---
@@ -232,10 +275,12 @@ pytest -c nav_arena/pyproject.toml -m "not integration" -v
 
 The codebase is organized into cleanly decoupled subsystems:
 
+- **CLI & Orchestration ([`nav_arena.cli`](file:///home/robopi/simulation/nav_arena/nav_arena/cli.py))**: Main command-line entry point supporting `run`, `sweep`, `runs`, `doctor`, `routes`, and `map`. Imports zero simulator or machine learning modules for fast (<0.15s) execution.
+- **Benchmarks & Sweeps ([`nav_arena.benchmarks`](file:///home/robopi/simulation/nav_arena/nav_arena/benchmarks/))**: Unified evaluation harness: `RunSpec` validation, session lifecycle management (`RunSession`), worker subprocess runner (`worker.py`), atomic manifest tracking (`BatchManifest`), Cartesian sweep matrix planner (`sweep.py`), result aggregation and comparison (`tracking.py`), and system diagnostics (`doctor.py`).
 - **Core Simulation ([`nav_arena.core`](file:///home/robopi/simulation/nav_arena/nav_arena/core/app.py))**: Centralized SimulationApp lifecycle management ([`launch_simulation_app`](file:///home/robopi/simulation/nav_arena/nav_arena/core/app.py)), boot-time OmniGraph/ROS 2 extension flag injection, and livestreaming configuration.
-- **Embodiments ([`nav_arena.embodiments`](file:///home/robopi/simulation/nav_arena/nav_arena/embodiments/))**: Robot physical properties, kinematic configurations (`DifferentialDriveAction`), pure kinematics math ([`diff_drive_ik`](file:///home/robopi/simulation/nav_arena/nav_arena/embodiments/kinematics.py)), programmatic sensor rigging (planar 360° LiDAR), and in-memory URDF synthesis ([`generate_robot_urdf`](file:///home/robopi/simulation/nav_arena/nav_arena/embodiments/urdf.py)). Completely decoupled from ROS 2 middleware dependencies.
+- **Embodiments ([`nav_arena.embodiments`](file:///home/robopi/simulation/nav_arena/nav_arena/embodiments/))**: Robot physical properties, kinematic configurations (`DifferentialDriveAction`), pure kinematics math ([`diff_drive_ik`](file:///home/robopi/simulation/nav_arena/nav_arena/embodiments/kinematics.py)), programmatic sensor rigging (planar 360° LiDAR), and in-memory URDF synthesis ([`generate_robot_urdf`](file:///home/robopi/simulation/nav_arena/nav_arena/embodiments/urdf.py)). Completely decoupled from ROS 2 middleware dependencies. Derived assets are resolved lazily on demand.
 - **Tasks ([`nav_arena.tasks`](file:///home/robopi/simulation/nav_arena/nav_arena/tasks/point_nav.py))**: RL and benchmark task definitions ([`PointNavTask`](file:///home/robopi/simulation/nav_arena/nav_arena/tasks/point_nav.py) extending Isaac Lab's `ManagerBasedRLEnv`), goal sampling, timeout handling, and chassis-isolated contact metrics.
-- **Scenes ([`nav_arena.scenes`](file:///home/robopi/simulation/nav_arena/nav_arena/scenes/interior_agent.py))**: Non-destructive USD scene conditioning using composition delta layers (`subLayerPaths`), automatic doorway clearing, and static triangle BVH generation for InteriorAgent assets.
+- **Scenes ([`nav_arena.scenes`](file:///home/robopi/simulation/nav_arena/nav_arena/scenes/interior_agent.py))**: Non-destructive USD scene conditioning using composition delta layers (`subLayerPaths`), automatic doorway clearing, and static triangle BVH generation for InteriorAgent assets. Lazy module exports ensure route queries never boot the simulator.
 - **Methods ([`nav_arena.methods`](file:///home/robopi/simulation/nav_arena/nav_arena/methods/))**: Navigation baselines, split by how they execute. [`in_process/`](file:///home/robopi/simulation/nav_arena/nav_arena/methods/in_process/) holds policies run directly in the simulation process (the `InProcessPolicy` contract, a shared path follower, a policy registry, and adapters for the NavDP-family learned baselines: iPlanner, ViNT, NavDP, VIPlanner, X-NavDP). [`ros2/`](file:///home/robopi/simulation/nav_arena/nav_arena/methods/ros2/) holds external ROS 2 stacks, including the Nav2 bringup launch files and tuned parameters.
 - **ROS 2 Bridges ([`nav_arena.ros2`](file:///home/robopi/simulation/nav_arena/nav_arena/ros2/))**: Zero-latency OmniGraph nodes for simulation clock (`/clock`), odometry (`/odom`), and TF (`map -> odom -> base_link`), coupled with asynchronous Python nodes ([`LaserScanPublisherNode`](file:///home/robopi/simulation/nav_arena/nav_arena/ros2/sensors.py), [`TaskStatePublisherNode`](file:///home/robopi/simulation/nav_arena/nav_arena/ros2/state_publisher.py)), action adapters ([`TwistActionAdapter`](file:///home/robopi/simulation/nav_arena/nav_arena/ros2/adapters/action_adapter.py)), and background executors ([`BackgroundRos2Executor`](file:///home/robopi/simulation/nav_arena/nav_arena/ros2/executor.py)).
 - **Tools ([`nav_arena.tools`](file:///home/robopi/simulation/nav_arena/nav_arena/tools/map_generator.py))**: Standalone offline utilities, including programmatic 2D occupancy grid generation from USD collision geometry.
@@ -247,25 +292,35 @@ The codebase is organized into cleanly decoupled subsystems:
 
 ```text
 nav_arena/
-├── pyproject.toml                     # Package specification (editable pip install)
+├── pyproject.toml                     # Package specification ([project.scripts] nav_arena)
 ├── README.md                          # Project documentation and architecture guide
 ├── CONTRIBUTING.md                    # Developer guidelines, primitives, and invariants
 ├── requirements/                      # Pinned, --no-deps dependency lists for the learned baselines
+├── sweeps/                            # Versioned batch sweep specifications (YAML)
 ├── docs/                              # Guides, designs, and integration notes
 │   ├── guides/                        # How-tos: adding a robot, choosing routes, running experiments
-│   ├── design/                        # Design docs for planned work (unified entry point)
+│   ├── design/                        # Architecture design documents
 │   └── baseline_integration_results.md
 ├── cache/                             # Generated runtime caches (git-ignored)
 │   ├── maps/                          # Cached 2D occupancy grids (PNG + YAML)
 │   ├── scenes/                        # Conditioned USD delta layers (e.g. open_doors)
 │   ├── assets/                        # Derived robot USDs (upstream + nav_arena fixes)
 │   ├── routes/                        # Route/run overlay images from tools/route_map.py
-│   └── runs/                          # Baseline run recordings (settings, steps, summary, snapshots)
+│   └── runs/                          # Baseline run recordings and batch sweeps (manifests, results.csv)
 ├── nav_arena/
+│   ├── cli.py                         # Unified entry point (run, sweep, runs, doctor, routes, map)
 │   ├── config/                        # RViz visualization layouts and displays
 │   ├── core/                          # SimulationApp lifecycle & boot-time extension injection
 │   │   ├── __init__.py                # Exports launch_simulation_app
 │   │   └── app.py                     # launch_simulation_app context manager
+│   ├── benchmarks/                    # Benchmark execution, sweep orchestration, tracking
+│   │   ├── spec.py                    # RunSpec definition, validation, and CLI overrides
+│   │   ├── session.py                 # RunSession (simulation app lifecycle, task & policy setup)
+│   │   ├── worker.py                  # Subprocess worker entry point
+│   │   ├── manifest.py                # BatchManifest atomic state machine
+│   │   ├── sweep.py                   # Matrix expansion and sweep execution loop
+│   │   ├── tracking.py                # Run querying, summaries, and results.csv comparisons
+│   │   └── doctor.py                  # System diagnostic health auditor
 │   ├── embodiments/                   # Robot kinematics, sensor factories, in-memory URDF
 │   │   ├── actions.py                 # DifferentialDriveActionCfg & ActionAdapter
 │   │   ├── assets.py                  # Derived robot USDs: upstream sublayer + baked-in fixes
@@ -311,12 +366,12 @@ nav_arena/
 │       ├── verify_embodiment.py       # Validates robot kinematics and 2D LiDAR ranges
 │       ├── verify_scene.py            # Validates scene loading and sensor raycasting
 │       ├── verify_task.py             # Validates PointNavTask MDP metrics, resets, and (--camera) sensors
-│       ├── verify_baseline.py         # Runs a learned baseline closed-loop and reports TTG / distance / cause
+│       ├── verify_baseline.py         # In-process verifier shim for learned baselines
 │       ├── verify_occupancy_map.py    # Generates and validates 2D occupancy maps
 │       ├── verify_tf_tree.py          # Validates robot_state_publisher and complete TF tree
 │       └── verify_nav2.py             # End-to-end Nav2 autonomous navigation benchmark
 └── tests/
-    ├── unit/                          # Tier 1: Fast CPU-only unit tests (~2s via pytest)
+    ├── unit/                          # Tier 1: Fast CPU-only unit tests (~11s via pytest, 413 tests)
     ├── ros2/                          # Tier 2: Subprocess & ROS 2 integration tests
     └── integration/                   # Tier 3: Full Isaac Sim simulation integration tests
 ```
@@ -329,8 +384,8 @@ nav_arena/
 |---|---|
 | [`docs/guides/adding-a-robot.md`](docs/guides/adding-a-robot.md) | Add a robot embodiment (USD, drive, sensors), validate it, and what a new drive type (ackermann, holonomic) requires |
 | [`docs/guides/choosing-routes.md`](docs/guides/choosing-routes.md) | Generate an occupancy map, pick valid start/goal pairs, run and register routes |
-| [`docs/guides/running-experiments.md`](docs/guides/running-experiments.md) | The current run workflow, run outputs, and how to read results |
-| [`docs/design/unified-entry-point.md`](docs/design/unified-entry-point.md) | Design for a single `nav_arena` CLI with batch runs and run tracking (not built yet) |
+| [`docs/guides/running-experiments.md`](docs/guides/running-experiments.md) | The unified `nav_arena` CLI workflow: single runs, YAML batch sweeps, resume, and metric comparisons |
+| [`docs/design/unified-entry-point.md`](docs/design/unified-entry-point.md) | Design for the unified entry point, batch sweeps, and run tracking (implemented in `nav_arena.benchmarks`) |
 | [`docs/baseline_integration_results.md`](docs/baseline_integration_results.md) | What the learned-baseline integration delivered, closed-loop results, known limitations, future work |
 
 **Known quirk:** in the `--viz kit` GUI the robot can look like it jolts forward although its simulated speed is constant (wall-clock step cost is uneven); recorded data is unaffected. Details and untested hypotheses are in the results doc's future-work section.

@@ -44,23 +44,48 @@ Create `nav_arena/nav_arena/embodiments/<robot>.py`. Locate the asset with `nav_
 absolute path); the Dingo uses an environment override, `NAV_ARENA_DINGO_USD`, with a workspace-relative default.
 
 ```python
-ROBOT_CFG = ArticulationCfg(
-    spawn=sim_utils.UsdFileCfg(usd_path=ROBOT_USD_PATH, activate_contact_sensors=True,
-                               articulation_props=sim_utils.ArticulationRootPropertiesCfg(
-                                   enabled_self_collisions=False,
-                                   solver_position_iteration_count=8, solver_velocity_iteration_count=4)),
-    init_state=ArticulationCfg.InitialStateCfg(pos=(0.0, 0.0, 0.25), rot=(0.0, 0.0, 0.0, 1.0),  # XYZW
-                                               joint_pos={...}, joint_vel={".*": 0.0}),
-    actuators={"wheels": ImplicitActuatorCfg(joint_names_expr=[...], effort_limit=..., velocity_limit_sim=...,
-                                             stiffness=0.0, damping=1.0)},
+def create_my_robot_articulation_cfg() -> ArticulationCfg:
+    return ArticulationCfg(
+        spawn=sim_utils.UsdFileCfg(
+            usd_path=get_robot_usd_path(),
+            activate_contact_sensors=True,
+            articulation_props=sim_utils.ArticulationRootPropertiesCfg(
+                enabled_self_collisions=False,
+                solver_position_iteration_count=8,
+                solver_velocity_iteration_count=4,
+            ),
+        ),
+        init_state=ArticulationCfg.InitialStateCfg(
+            pos=(0.0, 0.0, 0.25),
+            rot=(0.0, 0.0, 0.0, 1.0),  # XYZW
+            joint_pos={...},
+            joint_vel={".*": 0.0},
+        ),
+        actuators={
+            "wheels": ImplicitActuatorCfg(
+                joint_names_expr=[...],
+                effort_limit=...,
+                velocity_limit_sim=...,
+                stiffness=0.0,
+                damping=1.0,
+            )
+        },
+    )
+
+ROBOT_ACTION_CFG = DifferentialDriveActionCfg(
+    asset_name="robot",
+    left_wheel_joint_name=...,
+    right_wheel_joint_name=...,
+    wheel_radius=...,
+    wheel_base=...,
+    max_linear_speed=...,
+    max_angular_speed=...,
 )
-ROBOT_ACTION_CFG = DifferentialDriveActionCfg(asset_name="robot", left_wheel_joint_name=..., right_wheel_joint_name=...,
-                                              wheel_radius=..., wheel_base=..., max_linear_speed=..., max_angular_speed=...)
 
 @dataclass
 class MyRobotEmbodimentCfg(RobotEmbodimentCfg):
     name: str = "my_robot"
-    articulation_cfg: ArticulationCfg = field(default_factory=lambda: ROBOT_CFG)
+    articulation_cfg: ArticulationCfg = field(default_factory=create_my_robot_articulation_cfg)
     action_cfg: DifferentialDriveActionCfg = field(default_factory=lambda: ROBOT_ACTION_CFG)
     wheel_radius: float = ...
     wheel_base: float = ...
@@ -143,6 +168,8 @@ MyRobotEmbodimentCfg)` at module bottom; the Dingo does.) Instances are deep-cop
    ```
 4. **Closed loop.** A real planner on a known-good route; compare with another robot on the same route.
    ```bash
+   nav_arena run --method iplanner --robot my_robot --scene kujiale_0003 --route hall_straight
+   # Or via developer script:
    python -u nav_arena/nav_arena/scripts/verify_baseline.py --method iplanner --robot my_robot --route hall_straight
    ```
 5. **Optional:** an integration test modeled on `tests/integration/test_integration_dingo.py` (spawns in the scene,
