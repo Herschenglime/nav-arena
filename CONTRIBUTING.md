@@ -16,10 +16,11 @@ nav_arena/
 ├── scenes/       # Non-destructive USD loaders, delta layer conditioning, BVH preprocessors
 ├── methods/      # Autonomy baselines: in_process/ (policies run in the sim process) and ros2/ (external stacks, e.g. Nav2)
 ├── ros2/         # ROS 2 middleware bridges (OmniGraph builders, action adapters, async publisher nodes)
-├── tools/        # Standalone offline utilities (CLI 2D occupancy grid generator)
+├── tools/        # Standalone offline utilities (CLI 2D occupancy grid generator, route overlay)
 ├── utils/        # Cross-cutting primitives (ArenaLogger, managed_process, paths, create_mock_env)
 ├── scripts/      # Thin executable runners and verifiers (NO domain logic definitions)
-└── tests/        # 3-tier verification suite (unit/, ros2/, integration/)
+├── tests/        # 3-tier verification suite (unit/, ros2/, integration/)
+└── docs/         # (repo level) guides/, design/, and integration notes
 ```
 
 ### Module Responsibilities & Invariants
@@ -123,6 +124,35 @@ with BackgroundRos2Executor(nodes=[action_adapter, state_publisher, scan_publish
 - **Standard Coordinate Frames (REP-105)**: The bridge strictly maintains the standard transform tree: `map -> odom -> base_link -> chassis_link -> lidar_link`. Odometry publishes `odom -> base_link`, and AMCL or static state publisher provides `map -> odom`.
 - **Latched Topic QoS**: Task state topics that publish once per episode (e.g., `/goal_pose`, `/goal_reached`) must use `TRANSIENT_LOCAL` durability with depth 1 so late-joining nodes immediately receive state updates.
 
+### Embodiment, Sensor, and Learned-Baseline Gotchas
+
+Each item below cost real debugging time; the "why" is the part to remember. How-to guides: [`docs/guides/`](docs/guides/).
+
+**Embodiments and robot assets**
+- **Fix assets statically, not at runtime.** Express USD fixes as a derived asset ([`embodiments/assets.py`](nav_arena/embodiments/assets.py)): a small layer sublayering the untouched upstream file. A runtime `stage_patch_fn` runs as a `prestartup` event, which Isaac Lab only allows with `replicate_physics=False` (replicated physics parses just `env_0`, so per-clone edits would be silently ignored); see the README's "Robot Assets and USD Fixes".
+- **`pxr.PhysxSchema` only exists inside Kit.** Author PhysX attributes as plain USD (`apiSchemas` metadata plus the attribute) so code works in CPU tests, and raise if the target prim is missing instead of silently skipping.
+- **Derived USDs must carry `metersPerUnit` and `upAxis`.** Sublayer metadata does not propagate to the referencing stage; a missing `metersPerUnit` silently rescales the robot.
+- **Single-rigid-body robots (Dingo).** Colliders, caster and sensors all live on `base_link` (`body_link`), and the resting caster reads ~17.7 N on that link. `ground_contact_on_body=True` switches collision detection to lateral (XY) force; a plain force-norm check would terminate at t=0.
+- **Camera orientation.** Cameras use `convention="world"` (+X forward, +Z up) with the XYZW quaternion `(0, 0, 0, 1)`; copying a WXYZ quaternion from older Isaac Lab code rotates the camera.
+- **Occupancy maps are ROS-oriented**: image row 0 is the maximum y. Reading a map picture mirrored led to unsafe routes once.
+- **Current command space is `[v, omega]`** everywhere (action term, follower, runner). New drive types (ackermann, holonomic) must change all of them; see the "new drive type" section of the adding-a-robot guide.
+
+**Sensors, rendering, and the viewport**
+- **Never add visual aids as scene geometry.** Isaac Lab's goal arrow is real geometry that depth/RGB cameras see: planners treat it as an obstacle on their own goal and stop short (it erased a real run). It is off by default; the viewport overlay is an `omni.ui.scene` layer. `isaacsim.util.debug_draw` was measured to leak into camera RGB, so do not use it for anything a policy could see.
+- **`render_interval`** defaults to 20 (5 Hz at dt=0.01) when a camera is enabled; the runner calls `task.refresh_camera_frame()` at each plan rather than relying on render-phase alignment.
+- **GUI playback can look jerky** although simulated speed is constant (uneven wall-clock step cost). Not a physics bug; see the results doc's future work.
+
+**Learned baselines**
+- **One baseline per Python process.** Upstream NavDP modules share names (`policy_agent`), so a process can load only one planner. Strict checkpoint loading and the SHA-256 table in `navdp_adapter/checkpoints.py` are deliberate; do not relax them.
+- **Install baseline dependencies only into `env_isaaclab`**, with `uv pip install --no-deps` (Isaac's pinned torch/numpy must not move). Never install globally.
+- **iPlanner/VIPlanner stop permanently** when predicted fear reaches the threshold; a stopped robot's view never changes, so nothing recovers. The runner reports this as a `stalled` episode and logs the stop.
+- **Argument errors must come before the slow boot.** `verify_baseline.py` rejects ignored combinations (`--spawn` without `--goal`, `--route` with `--spawn/--goal`) through [`nav_arena.utils.cli_args`](nav_arena/utils/cli_args.py); put new pre-boot checks there so they are unit testable.
+
+**Lifecycle and processes**
+- **`launch_simulation_app` ends the process on exit.** `SimulationApp.close()` terminates it, so code after the `with` block never runs; return results by calling `sys.exit(n)` inside the block (an unhandled exception exits 1 with a logged traceback). Before this was fixed, every failure exited 0 and hid a failing integration test.
+- **One Isaac app per process**, so multi-run work needs one subprocess per run.
+- **Run directories use `mkdir(exist_ok=False)`** (second-resolution timestamps), so two runs started in the same second collide; give concurrent runs distinct `--output` paths.
+
 ---
 
 ## 4. Testing Framework & Marker Tiers
@@ -131,7 +161,7 @@ All contributions must be accompanied by appropriate test coverage across the 3-
 
 | Tier | Directory | Scope | Target Runtime | Marker |
 |---|---|---|---|---|
-| **L1: Unit** | [`tests/unit/`](file:///home/robopi/simulation/nav_arena/tests/unit/) | Fast CPU-only algorithmic logic, math, URDF parsing, mock tests. | < 3 seconds | `unit` (default) |
+| **L1: Unit** | [`tests/unit/`](file:///home/robopi/simulation/nav_arena/tests/unit/) | Fast CPU-only algorithmic logic, math, URDF parsing, mock tests. | ~8 seconds (200+ tests) | `unit` (default) |
 | **L2: ROS 2** | [`tests/ros2/`](file:///home/robopi/simulation/nav_arena/tests/ros2/) | Subprocess and ROS 2 middleware node interaction. | ~30 seconds | `@pytest.mark.ros2` |
 | **L3: Simulation** | [`tests/integration/`](file:///home/robopi/simulation/nav_arena/tests/integration/) | Full in-process or subprocess Isaac Sim PhysX and sensor tests. | ~30 seconds | `@pytest.mark.integration` |
 
@@ -159,4 +189,5 @@ All contributions must be accompanied by appropriate test coverage across the 3-
   ```
   Ensure all paths prepend `nav_arena/` when referencing internal package scripts.
 - **Agent Self-Execution**: In automated agent terminals, run `./agy_python.sh <script.py> [args...]` from `/home/robopi/simulation` to encapsulate `setup.env` and provide unbuffered stdout (`-u`).
+- **GPU etiquette**: Do not run Isaac jobs in the background while someone is using the GUI on the same machine: a long headless batch hung a live viewport (black screen). Check for running sessions first (`ps aux | grep -E 'verify_|isaaclab'`), and run integration tests (L3) only when the GPU is free.
 - **Interactive GUI**: Isaac Lab runs headless by default even if `--headless` is omitted (`--viz none`). To open the interactive viewport window on the user's active display, pass `--viz kit`.

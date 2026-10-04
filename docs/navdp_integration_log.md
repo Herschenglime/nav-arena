@@ -61,6 +61,8 @@ Plan of record: `~/.claude/plans/1-it-s-fine-to-goofy-gizmo.md` (supersedes
 | D15 | Dingo's stage patch runs as a `prestartup` event, so `scene.replicate_physics=False` is set for patched embodiments | Isaac Lab raises if a prestartup event is used with replication on. Irrelevant for single-env benchmarks; multi-env Dingo scenes lose physics replication (slower setup) | — |
 | D16 | Added a `tipped` termination (`mdp.bad_orientation`, 0.6 rad) to all envs, incl. Carter | Port of the labmate's `fell_or_tipped` stop; also adds `get_terminal_cause()` | `max_tilt` |
 | D17 | `render_interval` defaults to 20 (5 Hz at dt=0.01) when a camera is enabled, else 3 | Each render also pays for RTX camera rendering; baselines plan at 5 Hz. GUI users can pass a smaller value | `render_interval=` |
+| D20 | Dingo fixes baked into a derived USD (`embodiments/assets.py`, layered override generated into `cache/assets/`) instead of a `prestartup` stage patch; supersedes D4 and D15 for the Dingo | Both fixes are static; removes the replicate_physics restriction and call-site patching. Headless check: replication True, caster mode `min`, iPlanner `hall_straight` still 18.9 s | `stage_patch_fn` hook is still supported |
+| D21 | `verify_baseline.py` rejects `--spawn` without `--goal` (and the reverse) and `--route` combined with `--spawn/--goal`, via `utils/cli_args.py`, before booting | They were silently ignored. Audit: `--task` unsupported by a method and unknown `--policy-arg` keys already raise, but only after the boot | — |
 | D13 | Moved Nav2 to `methods/ros2/nav2`; also updated `verify_tf_tree.py`, which the original plan missed | It referenced the old path | — |
 
 ## Progress

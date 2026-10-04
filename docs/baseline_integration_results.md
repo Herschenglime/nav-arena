@@ -2,7 +2,10 @@
 
 Branch `feat/navdp-baselines`. This document records what the integration delivered, what the baselines did in
 closed loop, and what is left. The working log with every decision and its rationale is
-`docs/navdp_integration_log.md` (decisions D1-D19); this file is the durable summary.
+`docs/navdp_integration_log.md` (decisions D1-D21); this file is the durable summary.
+
+Related: how-to guides in [`docs/guides/`](guides/) (adding a robot, choosing routes, running experiments) and the
+design for a unified entry point in [`docs/design/unified-entry-point.md`](design/unified-entry-point.md).
 
 ## What was delivered
 
@@ -12,7 +15,7 @@ Isaac harness; upstream-file fixes live on the NavDP fork (`Herschenglime/NavDP`
 
 | Area | Result |
 |---|---|
-| Embodiments | Registry with Nova Carter and Clearpath Dingo (`body_link`, ground-contact flag, stage patch). The Dingo caster friction fix is plain USD and fails loudly. |
+| Embodiments | Registry with Nova Carter and Clearpath Dingo (`body_link`, ground-contact flag). The Dingo's ground-plane and caster-friction fixes are baked into a derived USD layer (`embodiments/assets.py`) that sublayers the untouched upstream asset, so no runtime stage patch or `replicate_physics=False` is needed for it. |
 | Sensing | RGB-D camera config (640x360, f=1.4, aperture 1.88, 0.05-20 m), identical to NavDP's own training config. |
 | Methods layout | `methods/in_process/` (policy contract, follower, registry, runner, `navdp_adapter/`) and `methods/ros2/nav2/` (moved). |
 | Policy contract | `step(PolicyObservation) -> Plan(path_body, stop, diagnostics)`; planner at 5 Hz (ViNT 3 Hz), shared lookahead follower at 50 Hz. |
@@ -61,7 +64,7 @@ Reading the table:
 - `verify_nav2.py` was not re-run after moving Nav2; only the relocated launch file, the TF-tree test and the L2 ROS
   tests were checked.
 - One baseline per process (upstream modules share names such as `policy_agent`).
-- Dingo multi-env scenes lose physics replication (`replicate_physics=False`, needed by the prestartup stage patch).
+- Embodiments that use a runtime `stage_patch_fn` (none today) must disable physics replication; the Dingo does not need one.
 - A one-off Kit startup SIGSEGV (exit 139) was seen once and did not reproduce.
 
 ## Future work

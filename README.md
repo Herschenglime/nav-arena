@@ -44,10 +44,11 @@ python -u nav_arena/nav_arena/scripts/verify_nav2.py --viz kit --rviz
 # 3. Inspect PointNav task execution interactively in Omniverse Kit
 python -u nav_arena/nav_arena/scripts/verify_task.py --viz kit
 
-# 4. Generate an offline 2D occupancy grid for scene kujiale_0003
+# 4. Generate an offline 2D occupancy grid for scene kujiale_0003 (needed to draw or choose routes;
+#    see docs/guides/choosing-routes.md)
 python -u -m nav_arena.tools.map_generator --scene kujiale_0003 --cell-size 0.05
 
-# 5. Run the fast CPU-only unit test suite (< 2.5s)
+# 5. Run the fast CPU-only unit test suite (~8 s)
 pytest -c nav_arena/pyproject.toml nav_arena/tests/unit -v
 ```
 
@@ -101,7 +102,7 @@ python -u nav_arena/nav_arena/scripts/verify_embodiment.py --robot dingo --camer
 ```
 
 ### Learned Baseline Evaluation
-Runs one in-process navigation baseline (`iplanner`, `vint`, `navdp`, `viplanner`, `x_navdp`) closed-loop on a PointNav route, then reports time-to-goal, distance remaining, and the terminal cause (`goal_reached`, `collision`, `tipped`, `time_out`, or `max_steps`). It exits 0 only when the goal is reached (2 otherwise, 1 on errors). Setup: see [Learned Baseline Setup](#learned-baseline-setup-navdp-family).
+Runs one in-process navigation baseline (`iplanner`, `vint`, `navdp`, `viplanner`, `x_navdp`) closed-loop on a PointNav route, then reports time-to-goal, distance remaining, and the terminal cause (`goal_reached`, `collision`, `tipped`, `time_out`, `stalled` for no movement over `--stall-timeout`, or `max_steps`). It exits 0 only when the goal is reached (2 otherwise, 1 on errors). Setup: see [Learned Baseline Setup](#learned-baseline-setup-navdp-family).
 ```bash
 source setup.env
 
@@ -135,6 +136,11 @@ The image is written to `cache/routes/<scene>_routes.png`. Routes for `kujiale_0
 | `through_doorway` | exits the hall through a ~1 m wall opening |
 | `to_far_room` | 10 m diagonal between furniture |
 
+### Robot Assets and USD Fixes
+Some upstream robot USD files need static fixes before they behave in simulation. The Clearpath Dingo ships an embedded ground plane (which would fight the scene's floor) and a frictionless caster sphere whose friction combines with the floor's by *average*, so the caster drags and the drive wheels slip; the combine mode must be `min`. These fixes are **baked into a derived asset** ([`embodiments/assets.py`](file:///home/robopi/simulation/nav_arena/nav_arena/embodiments/assets.py)): a tiny `.usda` that sublayers the untouched upstream `dingo.usd` and overrides only those prims. It is generated into `cache/assets/dingo_nav_arena_<hash>.usda` on first use (the hash covers the upstream file, so a changed asset rebuilds), never modifies upstream, and fails loudly if the upstream layout no longer matches. Prefer this route for any new robot.
+
+If a fix cannot be expressed as static USD, an embodiment may set `stage_patch_fn` instead. It runs as an Isaac Lab `prestartup` event, the only point where the stage can still be edited before physics is parsed (`ManagerBasedEnv.__init__` creates the scene and calls `sim.reset()` back to back). Isaac Lab multi-env scenes are built by authoring `env_0` and cloning it; with `replicate_physics=True` PhysX parses only `env_0` and copies it to the clones, so Isaac Lab refuses `prestartup` events in that mode (edits to individual clones would be silently ignored). An embodiment with a patch hook therefore forces `scene.replicate_physics=False`, which is harmless for the single-env benchmarks here but slows setup for many envs. The Dingo needs no hook, so it keeps replication on.
+
 ### Scene Verification (InteriorAgent)
 Loads an InteriorAgent USD scene, settles the robot on floor geometry, drives forward, and verifies 360° LiDAR raycasting:
 ```bash
@@ -162,7 +168,7 @@ python -u nav_arena/nav_arena/scripts/verify_task.py --robot dingo --camera
 python -u nav_arena/nav_arena/scripts/verify_task.py --viz kit
 ```
 
-`create_point_nav_env_cfg(robot_name=...)` configures the task for any registered embodiment: its articulation, action term, LiDAR/contact/camera sensors (on the embodiment's USD `body_link`), and any USD stage patch. `enable_camera=True` mounts the RGB-D camera (rendered at 5 Hz by default); `enable_goal_camera=True` adds a free-standing camera for `PointNavTask.render_goal_image(...)`, used by image-goal policies. Episodes end with `goal_reached`, `collision`, `tipped`, or `time_out` (`PointNavTask.get_terminal_cause()`).
+`create_point_nav_env_cfg(robot_name=...)` configures the task for any registered embodiment: its articulation, action term, LiDAR/contact/camera sensors (on the embodiment's USD `body_link`), and, for embodiments that need it, a runtime USD stage patch (see [Robot assets](#robot-assets-and-usd-fixes)). `enable_camera=True` mounts the RGB-D camera (rendered at 5 Hz by default); `enable_goal_camera=True` adds a free-standing camera for `PointNavTask.render_goal_image(...)`, used by image-goal policies. Episodes end with `goal_reached`, `collision`, `tipped`, or `time_out` (`PointNavTask.get_terminal_cause()`); the baseline runner adds `stalled` and `max_steps`.
 
 ### TF Tree Verification
 Spawns the robot, launches `robot_state_publisher` using programmatic URDF, and asserts transform continuity (`map -> odom -> base_link -> chassis_link -> lidar_link`):
@@ -198,7 +204,7 @@ The test suite is organized into three distinct verification tiers:
 
 | Tier | Directory | Description | Typical Runtime | Target Environment |
 |---|---|---|---|---|
-| **L1: Unit Tests** | [`tests/unit/`](file:///home/robopi/simulation/nav_arena/tests/unit/) | Fast, CPU-only algorithmic & component tests (kinematics, LaserScan math, logger, process management, scene resolution, URDF synthesis, embodiment registry, sensor configs, paths, in-process policy adapters and path follower). | ~7 seconds (193 tests) | Pure Python / CPU |
+| **L1: Unit Tests** | [`tests/unit/`](file:///home/robopi/simulation/nav_arena/tests/unit/) | Fast, CPU-only algorithmic & component tests (kinematics, LaserScan math, logger, process management, scene resolution, URDF synthesis, embodiment registry, sensor configs, paths, in-process policy adapters and path follower). | ~8 seconds (202 tests) | Pure Python / CPU |
 | **L2: ROS 2 Tests** | [`tests/ros2/`](file:///home/robopi/simulation/nav_arena/tests/ros2/) | Subprocess & ROS 2 middleware tests (Action adapters, OmniGraph builders, state publisher QoS, closed-loop driving). Marked with `@pytest.mark.ros2`. | ~30 seconds (4 tests) | ROS 2 Jazzy & Subprocess |
 | **L3: Simulation Tests** | [`tests/integration/`](file:///home/robopi/simulation/nav_arena/tests/integration/) | Isaac Sim tests run as headless subprocesses (occupancy grid generation, full `PointNavTask` stepping and resets, TF tree continuity, Dingo embodiment/camera/collision checks, and a full iPlanner episode). Marked with `@pytest.mark.integration`. | ~95 seconds (6 tests) | GPU / Isaac Sim PhysX |
 
@@ -245,10 +251,16 @@ nav_arena/
 ├── README.md                          # Project documentation and architecture guide
 ├── CONTRIBUTING.md                    # Developer guidelines, primitives, and invariants
 ├── requirements/                      # Pinned, --no-deps dependency lists for the learned baselines
-├── docs/                              # Integration notes and decision logs
+├── docs/                              # Guides, designs, and integration notes
+│   ├── guides/                        # How-tos: adding a robot, choosing routes, running experiments
+│   ├── design/                        # Design docs for planned work (unified entry point)
+│   └── baseline_integration_results.md
 ├── cache/                             # Generated runtime caches (git-ignored)
 │   ├── maps/                          # Cached 2D occupancy grids (PNG + YAML)
-│   └── scenes/                        # Conditioned USD delta layers (e.g. open_doors)
+│   ├── scenes/                        # Conditioned USD delta layers (e.g. open_doors)
+│   ├── assets/                        # Derived robot USDs (upstream + nav_arena fixes)
+│   ├── routes/                        # Route/run overlay images from tools/route_map.py
+│   └── runs/                          # Baseline run recordings (settings, steps, summary, snapshots)
 ├── nav_arena/
 │   ├── config/                        # RViz visualization layouts and displays
 │   ├── core/                          # SimulationApp lifecycle & boot-time extension injection
@@ -256,8 +268,12 @@ nav_arena/
 │   │   └── app.py                     # launch_simulation_app context manager
 │   ├── embodiments/                   # Robot kinematics, sensor factories, in-memory URDF
 │   │   ├── actions.py                 # DifferentialDriveActionCfg & ActionAdapter
+│   │   ├── assets.py                  # Derived robot USDs: upstream sublayer + baked-in fixes
+│   │   ├── base.py                    # RobotEmbodimentCfg (frames, geometry, sensors, body_link)
+│   │   ├── dingo.py                   # Clearpath Dingo differential base configuration
 │   │   ├── kinematics.py              # Pure math differential drive kinematics (FK & IK)
 │   │   ├── nova_carter.py             # Nova Carter differential base configuration
+│   │   ├── registry.py                # register_embodiment / get_embodiment / list_embodiments
 │   │   ├── sensors.py                 # Planar 2D LiDAR raycaster and RGB-D pinhole camera configuration
 │   │   └── urdf.py                    # Programmatic URDF string synthesis
 │   ├── methods/                       # Autonomy baselines and external stacks
@@ -284,6 +300,7 @@ nav_arena/
 │   │   ├── map_generator.py           # Programmatic 2D occupancy grid generation tool
 │   │   └── route_map.py               # Render routes and recorded runs over a cached occupancy map
 │   ├── utils/                         # Cross-cutting primitives and helpers
+│   │   ├── cli_args.py                # Pure argument checks usable before the simulator boots
 │   │   ├── logger.py                  # ArenaLogger framework, ANSI colors, Carbonite bridge
 │   │   ├── paths.py                   # Workspace-relative asset/data/cache paths (NAV_ARENA_* overrides)
 │   │   ├── process.py                 # managed_process subprocess context manager
@@ -306,7 +323,21 @@ nav_arena/
 
 ---
 
-## 7. Development & Contributing
+## 7. Documentation
+
+| Document | What it covers |
+|---|---|
+| [`docs/guides/adding-a-robot.md`](docs/guides/adding-a-robot.md) | Add a robot embodiment (USD, drive, sensors), validate it, and what a new drive type (ackermann, holonomic) requires |
+| [`docs/guides/choosing-routes.md`](docs/guides/choosing-routes.md) | Generate an occupancy map, pick valid start/goal pairs, run and register routes |
+| [`docs/guides/running-experiments.md`](docs/guides/running-experiments.md) | The current run workflow, run outputs, and how to read results |
+| [`docs/design/unified-entry-point.md`](docs/design/unified-entry-point.md) | Design for a single `nav_arena` CLI with batch runs and run tracking (not built yet) |
+| [`docs/baseline_integration_results.md`](docs/baseline_integration_results.md) | What the learned-baseline integration delivered, closed-loop results, known limitations, future work |
+
+**Known quirk:** in the `--viz kit` GUI the robot can look like it jolts forward although its simulated speed is constant (wall-clock step cost is uneven); recorded data is unaffected. Details and untested hypotheses are in the results doc's future-work section.
+
+---
+
+## 8. Development & Contributing
 
 For guidelines on adding new components, architectural boundaries, developer primitives, and test standards, refer to [`CONTRIBUTING.md`](CONTRIBUTING.md):
 - **Developer Primitives**: Lifecycle management ([`launch_simulation_app`](file:///home/robopi/simulation/nav_arena/nav_arena/core/app.py)), structured logging ([`ArenaLogger`](file:///home/robopi/simulation/nav_arena/nav_arena/utils/logger.py)), subprocess groups ([`managed_process`](file:///home/robopi/simulation/nav_arena/nav_arena/utils/process.py)), and background concurrency ([`BackgroundRos2Executor`](file:///home/robopi/simulation/nav_arena/nav_arena/ros2/executor.py)).
