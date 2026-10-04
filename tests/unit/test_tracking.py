@@ -592,7 +592,7 @@ class TestCliRunsCommands:
         assert "usage: nav_arena runs" in captured.out
 
     def test_cli_runs_list(self, synthetic_runs_dir: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]):
-        monkeypatch.setattr("nav_arena.cli.RUNS_DIR", synthetic_runs_dir)
+        monkeypatch.setattr("nav_arena.cli.runs.RUNS_DIR", synthetic_runs_dir)
         exit_code = main(["runs", "list"])
         assert exit_code == 0
         captured = capsys.readouterr()
@@ -600,7 +600,7 @@ class TestCliRunsCommands:
         assert "20261004-1600_sweep_test2" in captured.out
 
     def test_cli_runs_list_batch(self, synthetic_runs_dir: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]):
-        monkeypatch.setattr("nav_arena.cli.RUNS_DIR", synthetic_runs_dir)
+        monkeypatch.setattr("nav_arena.cli.runs.RUNS_DIR", synthetic_runs_dir)
         exit_code = main(["runs", "list", "--batch", "20261004-1500_sweep_test1"])
         assert exit_code == 0
         captured = capsys.readouterr()
@@ -608,7 +608,7 @@ class TestCliRunsCommands:
         assert "001_navdp_dingo_hall_straight_s0" in captured.out
 
     def test_cli_runs_show_batch(self, synthetic_runs_dir: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]):
-        monkeypatch.setattr("nav_arena.cli.RUNS_DIR", synthetic_runs_dir)
+        monkeypatch.setattr("nav_arena.cli.runs.RUNS_DIR", synthetic_runs_dir)
         exit_code = main(["runs", "show", "20261004-1500_sweep_test1"])
         assert exit_code == 0
         captured = capsys.readouterr()
@@ -616,7 +616,7 @@ class TestCliRunsCommands:
         assert "Progress:" in captured.out
 
     def test_cli_runs_show_run(self, synthetic_runs_dir: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]):
-        monkeypatch.setattr("nav_arena.cli.RUNS_DIR", synthetic_runs_dir)
+        monkeypatch.setattr("nav_arena.cli.runs.RUNS_DIR", synthetic_runs_dir)
         exit_code = main(["runs", "show", "000_iplanner_dingo_hall_straight_s0"])
         assert exit_code == 0
         captured = capsys.readouterr()
@@ -624,7 +624,7 @@ class TestCliRunsCommands:
         assert "Time to Goal:" in captured.out
 
     def test_cli_runs_compare(self, synthetic_runs_dir: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]):
-        monkeypatch.setattr("nav_arena.cli.RUNS_DIR", synthetic_runs_dir)
+        monkeypatch.setattr("nav_arena.cli.runs.RUNS_DIR", synthetic_runs_dir)
         exit_code = main(["runs", "compare", "20261004-1500_sweep_test1", "--by", "method"])
         assert exit_code == 0
         captured = capsys.readouterr()
@@ -632,8 +632,8 @@ class TestCliRunsCommands:
         assert "iplanner" in captured.out
 
     def test_cli_runs_rerun(self, synthetic_runs_dir: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr("nav_arena.cli.RUNS_DIR", synthetic_runs_dir)
-        with patch("nav_arena.cli.execute_single_run_process", return_value=0) as mock_exec:
+        monkeypatch.setattr("nav_arena.cli.runs.RUNS_DIR", synthetic_runs_dir)
+        with patch("nav_arena.cli.runs.execute_single_run_process", return_value=0) as mock_exec:
             exit_code = main(["runs", "rerun", "000_iplanner_dingo_hall_straight_s0", "--gui", "--quiet", "--force"])
             assert exit_code == 0
             mock_exec.assert_called_once()
@@ -642,7 +642,7 @@ class TestCliRunsCommands:
             assert mock_exec.call_args[1]["quiet"] is True
 
     def test_cli_runs_nonexistent_fails(self, synthetic_runs_dir: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr("nav_arena.cli.RUNS_DIR", synthetic_runs_dir)
+        monkeypatch.setattr("nav_arena.cli.runs.RUNS_DIR", synthetic_runs_dir)
         assert main(["runs", "show", "nonexistent"]) == 1
         assert main(["runs", "compare", "nonexistent"]) == 1
         assert main(["runs", "rerun", "nonexistent", "--force"]) == 1
@@ -795,7 +795,7 @@ class TestEdgeCasesAndRobustness:
 
     def test_cli_runs_rerun_syncs_batch(self, synthetic_runs_dir: Path, monkeypatch: pytest.MonkeyPatch):
         """Verify runs rerun updates the parent batch manifest and results.csv."""
-        monkeypatch.setattr("nav_arena.cli.RUNS_DIR", synthetic_runs_dir)
+        monkeypatch.setattr("nav_arena.cli.runs.RUNS_DIR", synthetic_runs_dir)
         target_run_id = "001_navdp_dingo_hall_straight_s0"
         b1_dir = synthetic_runs_dir / "20261004-1500_sweep_test1"
         r2_dir = b1_dir / target_run_id
@@ -829,7 +829,7 @@ class TestEdgeCasesAndRobustness:
                 })
             return 0
 
-        with patch("nav_arena.cli.execute_single_run_process", side_effect=fake_exec):
+        with patch("nav_arena.cli.runs.execute_single_run_process", side_effect=fake_exec):
             exit_code = main(["runs", "rerun", target_run_id, "--force"])
             assert exit_code == 0
 

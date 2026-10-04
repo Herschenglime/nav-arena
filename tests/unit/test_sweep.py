@@ -785,3 +785,10 @@ class TestSweepEdgeCasesAndPreflight:
         assert mock_logger.warning.call_count == 3
         # seeds -> info
         assert mock_logger.info.call_count == 1
+
+
+def test_sweep_rejects_parallel_jobs(tmp_path):
+    """Verify --jobs other than 1 is rejected, because parallel runs are not supported yet."""
+    spec_path = tmp_path / "s.yaml"
+    spec_path.write_text("name: j\nscene: kujiale_0003\nmethods: [iplanner]\nroutes: [hall_straight]\nseeds: [0]\n")
+    assert main(["sweep", str(spec_path), "--jobs", "2", "--force"]) == 1

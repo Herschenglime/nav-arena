@@ -13,7 +13,7 @@ ensuring fast and lightweight manifest operations in orchestrators and CLI tools
 from __future__ import annotations
 
 import copy
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 import json

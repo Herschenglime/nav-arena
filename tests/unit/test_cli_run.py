@@ -22,16 +22,11 @@ import pytest
 import yaml
 
 from nav_arena.benchmarks.spec import EpisodeLimits, RunSpec, VizCfg
-from nav_arena.cli import (
-    RESULTS_CSV_COLUMNS,
-    append_results_row,
-    check_preflight_processes,
-    compute_default_timeout,
-    format_results_row,
-    generate_run_dir,
-    load_spec_file,
-    main,
-)
+from nav_arena.benchmarks.launcher import compute_default_timeout
+from nav_arena.benchmarks.results import RESULTS_CSV_COLUMNS, append_results_row, format_results_row
+from nav_arena.benchmarks.sweep import check_preflight_processes
+from nav_arena.cli import main
+from nav_arena.cli.run import generate_run_dir, load_spec_file
 
 
 class TestCliRunArgParsing:
@@ -258,7 +253,10 @@ class TestFastStartupAndZeroHeavyImports:
     def test_zero_heavy_imports(self):
         check_code = (
             "import sys\n"
-            "import nav_arena.cli\n"
+            "import nav_arena.cli, nav_arena.cli.run, nav_arena.cli.sweep, nav_arena.cli.runs, nav_arena.cli.tools\n"
+            "import nav_arena.benchmarks.spec, nav_arena.benchmarks.manifest, nav_arena.benchmarks.sweep\n"
+            "import nav_arena.benchmarks.tracking, nav_arena.benchmarks.doctor, nav_arena.benchmarks.launcher\n"
+            "import nav_arena.benchmarks.results, nav_arena.benchmarks.io\n"
             "banned = ['isaaclab', 'isaacsim', 'omni', 'pxr', 'rclpy', 'torch']\n"
             "imported = [m for m in banned if m in sys.modules]\n"
             "if imported:\n"
@@ -540,7 +538,7 @@ class TestWorkerProcessExecution:
         assert rows[0]["success"] == "False"
 
     def test_preflight_conflict_detection(self, tmp_path: Path):
-        with patch("nav_arena.cli.check_preflight_processes", return_value=[(9999, "python verify_baseline.py")]):
+        with patch("nav_arena.cli.run.check_preflight_processes", return_value=[(9999, "python verify_baseline.py")]):
             with patch("nav_arena.benchmarks.launcher.managed_process") as mock_mp:
                 # Without --force -> blocked
                 code = main(["run", "--method", "iplanner", "--route", "hall_straight"])

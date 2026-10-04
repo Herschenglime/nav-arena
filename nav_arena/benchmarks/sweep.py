@@ -18,8 +18,8 @@ from __future__ import annotations
 
 import copy
 import csv
-from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass, field
+from datetime import datetime
 import json
 import logging
 import math
@@ -28,7 +28,6 @@ from pathlib import Path
 import platform
 import subprocess
 import sys
-import threading
 import time
 from typing import Any, NamedTuple
 
@@ -47,11 +46,9 @@ from nav_arena.benchmarks.spec import (
     EpisodeLimits,
     RunSpec,
     VizCfg,
-    validate_spec,
 )
 from nav_arena.utils.logger import get_logger
 from nav_arena.utils.paths import NAVDP_ROOT, PROJECT_ROOT, RUNS_DIR
-from nav_arena.utils.process import managed_process
 
 logger = get_logger("nav_arena.benchmarks.sweep")
 

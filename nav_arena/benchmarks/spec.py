@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 import ast
-import copy
 from dataclasses import asdict, dataclass, field
 import hashlib
 import json
