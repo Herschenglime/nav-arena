@@ -172,3 +172,15 @@ def test_camera_helpers_explain_missing_sensors():
         task.get_camera_frame()
     with pytest.raises(RuntimeError, match="enable_goal_camera=True"):
         task.render_goal_image((1.0, 2.0))
+
+
+def test_goal_marker_is_visible_by_default_but_can_be_hidden(scene_usd):
+    """Verify the goal arrow (real geometry that cameras see) can be disabled for camera-driven policies."""
+    assert _cfg(scene_usd).commands.pose_2d_command.debug_vis is True
+    assert _cfg(scene_usd, show_goal_marker=False).commands.pose_2d_command.debug_vis is False
+
+
+def test_scene_queries_are_opt_in(scene_usd):
+    """Verify PhysX scene queries (needed by the follow camera's occlusion rays) are off unless requested."""
+    assert _cfg(scene_usd).sim.enable_scene_query_support is False
+    assert _cfg(scene_usd, scene_queries=True).sim.enable_scene_query_support is True

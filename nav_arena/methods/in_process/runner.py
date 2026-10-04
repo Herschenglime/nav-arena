@@ -19,7 +19,7 @@ Task interface used: ``reset()``, ``step(action)``, ``step_dt``, ``device``, ``g
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 import json
 from pathlib import Path
 import time
@@ -53,6 +53,22 @@ class EpisodeCfg:
     """Simulated seconds between saved RGB/depth snapshots."""
     goal_image: np.ndarray | None = None
     """RGB goal image for image-goal policies; rendered at the goal pose when omitted."""
+    stall_timeout_s: float | None = 10.0
+    """End the episode as ``stalled`` if the robot moves less than ``stall_distance_m`` for this many simulated
+    seconds (for example a policy that requested a stop and never resumes). ``None`` disables the check."""
+    stall_distance_m: float = 0.05
+    progress_every_s: float = 5.0
+    """Simulated seconds between progress log lines (0 disables)."""
+    viewer: Any | None = None
+    """Optional display camera with ``update(position, yaw, dt)`` (see :class:`nav_arena.utils.viewer.ThirdPersonView`),
+    called every step. It never affects the sensor cameras."""
+    overlay: Any | None = None
+    """Optional viewport overlay with ``update(path_xy, stop, z)`` and ``clear()`` (see
+    :class:`nav_arena.utils.viewer.DebugOverlay`). It draws the goal and each new plan without touching the scene, so the
+    sensor cameras never see it."""
+    viewer_render_hz: float = 15.0
+    """With a viewer, extra display renders per simulated second so the GUI stays smooth and responsive even though
+    sensor rendering is only a few Hz."""
 
 
 @dataclass
@@ -60,7 +76,8 @@ class EpisodeResult:
     """Outcome and metrics of one episode."""
 
     terminal_cause: str
-    """``goal_reached``, ``collision``, ``tipped``, ``time_out``, or ``max_steps`` (step budget exhausted)."""
+    """``goal_reached``, ``collision``, ``tipped``, ``time_out``, ``stalled`` (no progress; see
+    ``EpisodeCfg.stall_timeout_s``), or ``max_steps`` (step budget exhausted)."""
     success: bool
     steps: int
     sim_time_s: float
@@ -124,8 +141,12 @@ def _json_default(value: Any) -> Any:
 
 
 def _jsonable(cfg: EpisodeCfg) -> dict[str, Any]:
-    data = asdict(cfg)
+    data = {f.name: getattr(cfg, f.name) for f in fields(cfg)}
+    data["follower"] = asdict(cfg.follower)
     data["goal_image"] = None if cfg.goal_image is None else list(cfg.goal_image.shape)
+    data["viewer"] = None if cfg.viewer is None else type(cfg.viewer).__name__
+    data["overlay"] = None if cfg.overlay is None else type(cfg.overlay).__name__
+    data["output_dir"] = None if cfg.output_dir is None else str(cfg.output_dir)
     return data
 
 
@@ -178,6 +199,8 @@ def run_episode(task: Any, policy: InProcessPolicy, cfg: EpisodeCfg | None = Non
         Image.fromarray(goal_image).save(recorder.dir / "goal_rgb.png")
 
     policy.reset()
+    if cfg.overlay is not None:
+        cfg.overlay.update(np.empty((0, 2)), False, float(task.get_robot_position_w()[2]))
     path_body = np.empty((0, 2))
     path_world = np.empty((0, 2))
     stop = False
@@ -188,6 +211,11 @@ def run_episode(task: Any, policy: InProcessPolicy, cfg: EpisodeCfg | None = Non
     initial_distance = distance = float(task.get_goal_distance())
     terminal_cause: str | None = None
     sim_time = 0.0
+    v = w = 0.0
+    display_period = max(1, round(1.0 / (cfg.viewer_render_hz * step_dt))) if cfg.viewer is not None else 0
+    next_progress = 0.0
+    stall_ref_xy = prev_xy.copy()
+    stall_ref_time = 0.0
 
     for step in range(cfg.max_steps):
         x, y, yaw = task.get_robot_pose_w()
@@ -195,6 +223,28 @@ def run_episode(task: Any, policy: InProcessPolicy, cfg: EpisodeCfg | None = Non
         distance = float(task.get_goal_distance())
         path_length += float(np.linalg.norm(position_xy - prev_xy))
         prev_xy = position_xy
+
+        if cfg.viewer is not None:
+            cfg.viewer.update(task.get_robot_position_w(), yaw, dt=step_dt)
+            if step % display_period == 0:
+                task.sim.render()
+
+        if cfg.progress_every_s > 0 and sim_time + 1e-9 >= next_progress:
+            state = "STOPPED by policy" if stop else f"v={v:.2f} m/s w={w:+.2f} rad/s"
+            logger.info(f"t={sim_time:5.1f}s pos=({x:.2f}, {y:.2f}) goal_distance={distance:.2f} m {state}")
+            next_progress += cfg.progress_every_s
+
+        if cfg.stall_timeout_s is not None:
+            if float(np.linalg.norm(position_xy - stall_ref_xy)) > cfg.stall_distance_m:
+                stall_ref_xy, stall_ref_time = position_xy.copy(), sim_time
+            elif sim_time - stall_ref_time >= cfg.stall_timeout_s:
+                reason = "the policy is requesting a stop" if stop else "the robot is not moving"
+                logger.warning(
+                    f"Stalled: moved < {cfg.stall_distance_m} m for {cfg.stall_timeout_s:.0f} s at "
+                    f"({x:.2f}, {y:.2f}), {distance:.2f} m from the goal; {reason}."
+                )
+                terminal_cause = "stalled"
+                break
 
         if step % plan_period == 0:
             rgb, depth = task.refresh_camera_frame()
@@ -220,9 +270,18 @@ def run_episode(task: Any, policy: InProcessPolicy, cfg: EpisodeCfg | None = Non
             plan: Plan = policy.step(obs)
             inference_ms.append((time.monotonic() - before) * 1000.0)
             plans += 1
+            if plan.stop and not stop:
+                logger.warning(
+                    f"{policy.name} requested a stop at ({x:.2f}, {y:.2f}), {distance:.2f} m from the goal: "
+                    f"{plan.diagnostics}"
+                )
+            elif stop and not plan.stop:
+                logger.info(f"{policy.name} cleared its stop request at ({x:.2f}, {y:.2f})")
             stop = plan.stop
             stop_requests += int(stop)
             path_world = body_to_world(plan.path[:, :2], np.array([x, y]), yaw)
+            if cfg.overlay is not None:
+                cfg.overlay.update(path_world, stop, float(task.get_robot_position_w()[2]))
             recorder.plan_row(
                 dict(
                     step=step,
@@ -250,6 +309,8 @@ def run_episode(task: Any, policy: InProcessPolicy, cfg: EpisodeCfg | None = Non
             terminal_cause = task.get_terminal_cause() or "time_out"
             break
 
+    if cfg.overlay is not None:
+        cfg.overlay.clear()
     if terminal_cause is None:
         terminal_cause = "max_steps"
     success = terminal_cause == "goal_reached"

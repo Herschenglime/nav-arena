@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import math
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -37,6 +38,11 @@ class FakeTask:
         self.zero_steps = 0
         self.steps_taken = 0
         self.actions = []
+        self.renders = 0
+        self.sim = SimpleNamespace(render=self._render)
+
+    def _render(self):
+        self.renders += 1
 
     def reset(self):
         self.pose = self.start.copy()
@@ -241,3 +247,91 @@ def test_recorder_refuses_to_overwrite_a_previous_run(tmp_path):
     out.mkdir()
     with pytest.raises(FileExistsError):
         run_episode(FakeTask(), GoalSeeker(), _cfg(output_dir=out))
+
+
+class FakeViewer:
+    def __init__(self):
+        self.updates = []
+
+    def update(self, position, yaw, dt=0.02):
+        self.updates.append((tuple(position), yaw, dt))
+
+
+def test_stalled_episode_ends_early_with_a_clear_cause():
+    """Verify a robot held still by a stop request ends as 'stalled' after the timeout, not at the step budget."""
+    result = run_episode(
+        FakeTask(), GoalSeeker(stop=True), _cfg(max_steps=5000, warmup_steps=0, stall_timeout_s=1.0, progress_every_s=0)
+    )
+    assert result.terminal_cause == "stalled" and not result.success
+    assert 50 <= result.steps <= 60  # 1 s of simulated time at 50 Hz
+    assert result.stop_requests == result.plans > 0
+
+
+def test_stall_check_can_be_disabled_and_does_not_fire_while_moving():
+    """Verify stall detection is skippable, and a driving robot never trips it."""
+    held = run_episode(FakeTask(), GoalSeeker(stop=True), _cfg(max_steps=120, warmup_steps=0, stall_timeout_s=None))
+    assert held.terminal_cause == "max_steps"
+    moving = run_episode(FakeTask(), GoalSeeker(), _cfg(stall_timeout_s=1.0))
+    assert moving.terminal_cause == "goal_reached"
+
+
+def test_viewer_follows_every_step_and_adds_display_renders():
+    """Verify the viewer is updated each step with the robot pose and extra renders run at viewer_render_hz."""
+    task, viewer = FakeTask(), FakeViewer()
+    result = run_episode(task, GoalSeeker(), _cfg(viewer=viewer, viewer_render_hz=25.0))
+    assert len(viewer.updates) == result.steps
+    assert viewer.updates[0][0] == pytest.approx((0.0, 0.0, 0.1))
+    assert all(dt == pytest.approx(0.02) for _, _, dt in viewer.updates)
+    # 25 Hz at dt=0.02 -> every 2nd step; every plan also forces its own render only inside the real task
+    assert task.renders == math.ceil(result.steps / 2)
+
+
+def test_no_viewer_means_no_display_renders():
+    """Verify display renders happen only when a viewer is attached."""
+    task = FakeTask()
+    run_episode(task, GoalSeeker(), _cfg())
+    assert task.renders == 0
+
+
+def test_recorder_handles_a_viewer_in_the_settings(tmp_path):
+    """Verify a (non-serializable) viewer is recorded by type name and does not break settings.json."""
+    out = tmp_path / "run"
+    run_episode(FakeTask(), GoalSeeker(), _cfg(output_dir=out, viewer=FakeViewer()))
+    settings = json.loads((out / "settings.json").read_text())
+    assert settings["episode"]["viewer"] == "FakeViewer"
+    assert settings["episode"]["stall_timeout_s"] == 10.0
+    assert settings["episode"]["follower"]["goal_tolerance"] == 0.4
+
+
+class FakeOverlay:
+    def __init__(self):
+        self.updates = []
+        self.cleared = 0
+
+    def update(self, path_xy, stop, z):
+        self.updates.append((np.asarray(path_xy).copy(), stop, z))
+
+    def clear(self):
+        self.cleared += 1
+
+
+def test_overlay_shows_the_goal_then_every_plan_and_clears_at_the_end():
+    """Verify the overlay is drawn at the start (empty plan), once per plan with its stop flag, and cleared at the end."""
+    overlay = FakeOverlay()
+    result = run_episode(FakeTask(), GoalSeeker(), _cfg(overlay=overlay))
+    assert len(overlay.updates) == 1 + result.plans
+    first_path, first_stop, z = overlay.updates[0]
+    assert first_path.shape == (0, 2) and first_stop is False and z == pytest.approx(0.1)
+    # plans are drawn in the world frame: the straight-line plan from the origin heads toward the goal at x=3
+    path, stop, _ = overlay.updates[1]
+    assert path[-1][0] == pytest.approx(3.0, abs=0.05) and stop is False
+    assert overlay.cleared == 1
+
+
+def test_overlay_receives_the_stop_flag_and_is_recorded_in_settings(tmp_path):
+    """Verify stop requests reach the overlay, and the settings record the overlay type."""
+    overlay = FakeOverlay()
+    out = tmp_path / "run"
+    run_episode(FakeTask(), GoalSeeker(stop=True), _cfg(overlay=overlay, max_steps=30, warmup_steps=0, output_dir=out))
+    assert all(stop for _, stop, _ in overlay.updates[1:])
+    assert json.loads((out / "settings.json").read_text())["episode"]["overlay"] == "FakeOverlay"

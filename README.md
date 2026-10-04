@@ -115,7 +115,18 @@ python -u nav_arena/nav_arena/scripts/verify_baseline.py --method navdp --route 
 python -u nav_arena/nav_arena/scripts/verify_baseline.py --method x_navdp --robot nova_carter \
     --spawn -6.4 0.5 --goal -0.4 0.5 --goal-dist 0.5 --policy-arg fear_threshold=0.5
 ```
-Each run writes `settings.json`, per-plan `steps.jsonl`, `summary.json`, and periodic RGB/depth snapshots to `cache/runs/<timestamp>_<method>_<robot>_<route>/` (override with `--output` or `NAV_ARENA_RUNS_DIR`). Routes for `kujiale_0003` are defined in [`scenes/routes.py`](file:///home/robopi/simulation/nav_arena/nav_arena/scenes/routes.py):
+Each run writes `settings.json`, per-plan `steps.jsonl`, `summary.json`, and periodic RGB/depth snapshots to `cache/runs/<timestamp>_<method>_<robot>_<route>/` (override with `--output` or `NAV_ARENA_RUNS_DIR`).
+
+With `--viz kit` a third-person **follow camera** tracks the robot (`--no-follow-camera` to disable). Isaac Lab's goal arrow is hidden by default (`--show-goal-marker` to draw it) because it is real scene geometry that the policy's cameras see: depth planners treat it as an obstacle sitting on their own goal and stop short of it. Instead, `--viz kit` draws a **viewport-only overlay** (`--no-goal-overlay` to disable): a goal pin with a tolerance ring, plus the policy's current path (cyan while driving, red while it requests a stop). It is an `omni.ui.scene` layer over the viewport, not scene geometry, so it never appears in the robot's cameras (`isaacsim.util.debug_draw` was tried and measured to leak into camera RGB). An episode that makes no progress for `--stall-timeout` simulated seconds (default 10) ends as `stalled`; note that iPlanner/VIPlanner stop whenever predicted fear reaches the threshold and never resume on their own.
+
+To see where a route lies, or where a recorded run actually drove, stopped, or collided, render them over the cached occupancy map (no simulator needed):
+```bash
+source setup.env
+python -u -m nav_arena.tools.route_map --scene kujiale_0003                       # all routes + reference paths
+python -u -m nav_arena.tools.route_map --route around_table --run nav_arena/cache/runs/<run_dir>
+python -u -m nav_arena.tools.route_map --spawn -3 0.9 --goal -6.3 -1.2             # ad-hoc start/goal
+```
+The image is written to `cache/routes/<scene>_routes.png`. Routes for `kujiale_0003` are defined in [`scenes/routes.py`](file:///home/robopi/simulation/nav_arena/nav_arena/scenes/routes.py):
 
 | Route | Character |
 |---|---|
@@ -187,7 +198,7 @@ The test suite is organized into three distinct verification tiers:
 
 | Tier | Directory | Description | Typical Runtime | Target Environment |
 |---|---|---|---|---|
-| **L1: Unit Tests** | [`tests/unit/`](file:///home/robopi/simulation/nav_arena/tests/unit/) | Fast, CPU-only algorithmic & component tests (kinematics, LaserScan math, logger, process management, scene resolution, URDF synthesis, embodiment registry, sensor configs, paths, in-process policy adapters and path follower). | ~6 seconds (169 tests) | Pure Python / CPU |
+| **L1: Unit Tests** | [`tests/unit/`](file:///home/robopi/simulation/nav_arena/tests/unit/) | Fast, CPU-only algorithmic & component tests (kinematics, LaserScan math, logger, process management, scene resolution, URDF synthesis, embodiment registry, sensor configs, paths, in-process policy adapters and path follower). | ~7 seconds (193 tests) | Pure Python / CPU |
 | **L2: ROS 2 Tests** | [`tests/ros2/`](file:///home/robopi/simulation/nav_arena/tests/ros2/) | Subprocess & ROS 2 middleware tests (Action adapters, OmniGraph builders, state publisher QoS, closed-loop driving). Marked with `@pytest.mark.ros2`. | ~30 seconds (4 tests) | ROS 2 Jazzy & Subprocess |
 | **L3: Simulation Tests** | [`tests/integration/`](file:///home/robopi/simulation/nav_arena/tests/integration/) | Isaac Sim tests run as headless subprocesses (occupancy grid generation, full `PointNavTask` stepping and resets, TF tree continuity, Dingo embodiment/camera/collision checks, and a full iPlanner episode). Marked with `@pytest.mark.integration`. | ~95 seconds (6 tests) | GPU / Isaac Sim PhysX |
 
@@ -269,12 +280,14 @@ nav_arena/
 │   │   └── routes.py                  # Named start/goal routes per scene
 │   ├── tasks/                         # PointNavTask (ManagerBasedRLEnv), MDP terms, metrics
 │   │   └── point_nav.py               # PointNavTask environment & MDP configuration
-│   ├── tools/                         # Offline utilities (CLI 2D map generator)
-│   │   └── map_generator.py           # Programmatic 2D occupancy grid generation tool
+│   ├── tools/                         # Offline utilities (CLI 2D map generator, route overlay)
+│   │   ├── map_generator.py           # Programmatic 2D occupancy grid generation tool
+│   │   └── route_map.py               # Render routes and recorded runs over a cached occupancy map
 │   ├── utils/                         # Cross-cutting primitives and helpers
 │   │   ├── logger.py                  # ArenaLogger framework, ANSI colors, Carbonite bridge
 │   │   ├── paths.py                   # Workspace-relative asset/data/cache paths (NAV_ARENA_* overrides)
 │   │   ├── process.py                 # managed_process subprocess context manager
+│   │   ├── viewer.py                  # GUI-only aids: ThirdPersonView follow camera, DebugOverlay goal/plan layer
 │   │   └── sim.py                     # Testing mocks and scene path resolution
 │   └── scripts/                       # Executable verification and benchmark runners
 │       ├── run_ros2_nav.py            # Main execution orchestrator for ROS 2 bridge

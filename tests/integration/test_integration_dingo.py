@@ -55,8 +55,19 @@ def test_dingo_pointnav_task_without_false_collisions():
 )
 def test_iplanner_reaches_goal_on_dingo():
     """Verify a full closed-loop episode: iPlanner drives the Dingo across the hall to the goal."""
+    # The route passes within ~1 m of a dining chair, where iPlanner's predicted fear peaks at ~0.70. Its stop gate has
+    # no recovery, so a 0.7 threshold makes this test hinge on GPU float noise; 0.8 keeps it about integration.
     result = _run(
-        "verify_baseline.py", "--method", "iplanner", "--robot", "dingo", "--route", "hall_straight", timeout=600
+        "verify_baseline.py",
+        "--method",
+        "iplanner",
+        "--robot",
+        "dingo",
+        "--route",
+        "hall_straight",
+        "--policy-arg",
+        "fear_threshold=0.8",
+        timeout=600,
     )
     _assert_ok(result, "verify_baseline.py --method iplanner")
     assert "Terminal cause:       goal_reached" in result.stdout.replace("\x1b[0m", "")

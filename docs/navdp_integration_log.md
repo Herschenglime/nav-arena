@@ -29,7 +29,15 @@ Plan of record: `~/.claude/plans/1-it-s-fine-to-goofy-gizmo.md` (supersedes
    would count it. Do you want a recovery behavior (e.g. rotate in place when stopped) or looser tolerance as defaults?
 5. **Unpushed work:** nav_arena commits on `feat/navdp-baselines` are local. NavDP fork is pinned at `8b9ee13` (pushed by
    you).
-6. Delete this log (and decide whether to keep `requirements/baselines-mmcv.md`) before merging.
+6. **GUI-only features I could not see.** The follow camera works (you confirmed). The goal/plan overlay (`--viz kit`) is
+   unverified in a real viewport: its `omni.ui.scene` drawing calls ran cleanly in a headless Kit session inside a plain
+   `ui.Window`, but attaching to the viewport and how it looks need your eyes. Check that the pin/ring/path appear, **and**
+   that the run's saved `rgb_*.png` snapshots show none of them (that is the whole point). It fails soft: if it cannot
+   draw it logs a warning and the run continues.
+7. **Results table is partial.** 14 of 20 clean (marker-off) runs completed before I stopped the matrix; see the table
+   below. `to_far_room` (all methods) and ViNT/`through_doorway` are missing. I will not re-run them until you say the GPU
+   is free (the background run hung your GUI session).
+8. Delete this log (and decide whether to keep `requirements/baselines-mmcv.md`) before merging.
 
 ## Decisions made (with rationale)
 
@@ -47,6 +55,8 @@ Plan of record: `~/.claude/plans/1-it-s-fine-to-goofy-gizmo.md` (supersedes
 | D10 | Labmate's `follow_path` ported verbatim (as `FollowerCfg` + `follow_path`); his `wheel_speeds` dropped in favor of `diff_drive_ik` / `DifferentialDriveAction` | Avoids duplicate kinematics; his follower is what produced his working runs | — |
 | D11 | Registry names use underscores (`x_navdp`); hyphenated upstream spellings accepted | Matches the original plan and Python identifiers | — |
 | D12 | Policy `seed` defaults to 0 (torch + numpy seeded at construction) | NavDP diffusion sampling is stochastic; makes runs repeatable | `seed=None` |
+| D18 | Goal marker (Isaac Lab arrow) is OFF by default in `verify_baseline` (`create_point_nav_env_cfg(show_goal_marker=...)`) | It is scene geometry, so cameras see it. Measured: erasing the marker from one depth frame dropped iPlanner fear from 0.83 to 0.07. It had made iPlanner halt 3.5 m from the goal in your GUI run, and contaminated my earlier results table | `--show-goal-marker` |
+| D19 | The goal/plan overlay uses `omni.ui.scene`, not `isaacsim.util.debug_draw` | Measured (headless): a debug_draw ring + path 2 m in front of the robot appeared in the camera RGB (2737 overlay-green pixels vs 0 baseline; depth unaffected). A UI layer is not part of any render product | `--no-goal-overlay` |
 | D14 | Collision detection for robots with `ground_contact_on_body` (Dingo) uses lateral (XY) contact force only (`lateral_contact`) | Measured: Dingo `base_link` reads ~17.7 N net force just resting on its caster, which would trip the Carter-style any-force check at t=0. Free-drive lateral force is 0.000 N; wall impact still detected | set `ground_contact_on_body=False` |
 | D15 | Dingo's stage patch runs as a `prestartup` event, so `scene.replicate_physics=False` is set for patched embodiments | Isaac Lab raises if a prestartup event is used with replication on. Irrelevant for single-env benchmarks; multi-env Dingo scenes lose physics replication (slower setup) | — |
 | D16 | Added a `tipped` termination (`mdp.bad_orientation`, 0.6 rad) to all envs, incl. Carter | Port of the labmate's `fell_or_tipped` stop; also adds `get_terminal_cause()` | `max_tilt` |
@@ -113,3 +123,26 @@ Plan of record: `~/.claude/plans/1-it-s-fine-to-goofy-gizmo.md` (supersedes
   (exit 139, 13 ms into startup) in one run of a scratch script; 4 immediate repeats were fine. Not related to these changes.
 - **Phase 5 / planning cadence:** the runner calls `task.refresh_camera_frame()` (render + read) at each plan instead of
   relying on `render_interval` phase alignment, so ViNT's 3 Hz (33-step period) works with the 5 Hz render cadence.
+
+- **Why your GUI run stalled (found by analysing its saved frames):** the robot drove 2.4 m, then iPlanner's fear jumped to
+  0.83 and stayed there: the goal arrow marker was in the depth image, 3.5 m ahead on its own path. iPlanner's stop gate
+  has no recovery and a stopped robot's view never changes, so one spike is a permanent stop. Even with the marker gone,
+  `hall_straight` is marginal for iPlanner: it passes within ~1 m of a dining chair and fear peaks at 0.6996 against the
+  0.7 gate. The new `stalled` terminal cause (no movement for 10 simulated seconds) and stop/stall log lines make this
+  visible instead of silent. The Fabric warning about `/Visuals/Command/pose_goal` came from that marker and goes away with it.
+- **Pause (Space) in the GUI:** `SimulationContext.step` blocks while the timeline is paused and resumes afterwards; the
+  runner counts steps, not wall time, so pausing is safe. The reported "cannot resume" was the marker deadlock already in
+  progress.
+- **Process note:** I started a long headless matrix in the background while you were testing in the GUI; it very likely
+  caused the hang/black viewport. Stopped. No GPU jobs without checking first (a quick `ps` guard for Isaac sessions).
+- **Clean results (marker off; Dingo; 30 s budget; goal 0.4 m; 0.3 m/s; seed 0; 14 of 20 runs):**
+
+  | Method | hall_straight | around_table | through_doorway |
+  |---|---|---|---|
+  | iPlanner | goal, 18.9 s | stalled (stopped by fear at plan 1) | stalled (stopped by fear at plan 1) |
+  | NavDP | stalled 0.47 m short | collision | collision |
+  | X-NavDP | goal, 19.0 s | collision | goal, 12.4 s |
+  | VIPlanner | goal, 23.6 s | stalled (fear) | stalled (fear) |
+  | ViNT (image goal) | collision | collision | not run |
+
+  This supersedes the Phase 5 table above (it was recorded with the marker visible).

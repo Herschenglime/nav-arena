@@ -46,12 +46,41 @@ parser.add_argument("--seed", type=int, default=0, help="RNG seed for stochastic
 parser.add_argument(
     "--policy-arg", action="append", default=[], metavar="KEY=VALUE", help="Extra policy config field, e.g. fear_threshold=0.5."
 )
+parser.add_argument(
+    "--stall-timeout",
+    type=float,
+    default=10.0,
+    help="End the episode as 'stalled' after this many simulated seconds without movement (0 disables).",
+)
+parser.add_argument(
+    "--follow-camera",
+    action=argparse.BooleanOptionalAction,
+    default=None,
+    help="Third-person viewport camera behind the robot (default: on when a Kit GUI is requested with --viz kit).",
+)
+parser.add_argument("--follow-distance", type=float, default=1.6, help="Follow camera distance behind the robot (m).")
+parser.add_argument("--follow-height", type=float, default=1.2, help="Follow camera height above the robot (m).")
+parser.add_argument(
+    "--goal-overlay",
+    action=argparse.BooleanOptionalAction,
+    default=None,
+    help="Viewport-only overlay: goal pin, tolerance ring, and the policy's current path (red while it requests a "
+    "stop). Drawn as a UI layer over the viewport, so the policy's cameras cannot see it (default: on with --viz kit).",
+)
+parser.add_argument(
+    "--show-goal-marker",
+    action="store_true",
+    help="Draw Isaac Lab's goal arrow as scene geometry. WARNING: the policy's cameras see it and treat it as an "
+    "obstacle, which can make planners stop short of the goal. Prefer --goal-overlay.",
+)
 parser.add_argument("--output", type=Path, default=None, help="Run output directory (default: cache/runs/<timestamp>).")
 add_logger_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 # The baselines are camera-driven: RTX rendering must be enabled before the app boots.
 args_cli.enable_cameras = True
+GUI = "kit" in (getattr(args_cli, "visualizer", None) or [])
+OVERLAY = args_cli.goal_overlay if args_cli.goal_overlay is not None else GUI
 
 configure_logging(args_cli.log_level)
 
@@ -92,6 +121,11 @@ def run_verification():
     logger.section(f"BASELINE '{args_cli.method}' ON '{args_cli.robot}': {args_cli.scene}/{route_name}")
     logger.info(f"Spawn {spawn_xy} (yaw {math.degrees(spawn_yaw):.0f} deg) -> goal {goal_xy}")
 
+    gui = GUI
+    follow = args_cli.follow_camera if args_cli.follow_camera is not None else gui
+    if args_cli.show_goal_marker:
+        logger.warning("Goal marker enabled: policies' cameras will see it as an obstacle at the goal.")
+
     step_dt = 0.02  # dt = 0.01 s, decimation = 2
     env_cfg = create_point_nav_env_cfg(
         scene_id_or_path=args_cli.scene,
@@ -104,8 +138,21 @@ def run_verification():
         enable_camera=True,
         enable_goal_camera=args_cli.task == "imagegoal"
         or (args_cli.task is None and args_cli.method == "vint"),
+        show_goal_marker=args_cli.show_goal_marker,
+        scene_queries=follow,
     )
     task = PointNavTask(cfg=env_cfg)
+    viewer = None
+    if follow:
+        from nav_arena.utils.viewer import ThirdPersonView
+
+        viewer = ThirdPersonView(distance=args_cli.follow_distance, height=args_cli.follow_height)
+        logger.info("Third-person follow camera enabled")
+    elif gui:
+        # The default viewport camera sits outside the building looking at the roof.
+        task.sim.set_camera_view(
+            eye=[spawn_xy[0] - 2.0, spawn_xy[1] - 2.5, 2.2], target=[spawn_xy[0] + 1.0, spawn_xy[1], 0.4]
+        )
     task.reset()
     for _ in range(4):  # RTX output needs a few frames before intrinsics/frames are valid
         task.sim.render()
@@ -120,10 +167,19 @@ def run_verification():
     policy = get_policy(args_cli.method, task.get_camera_intrinsics(), **cfg_kwargs)
 
     output = args_cli.output or (RUNS_DIR / f"{datetime.now():%Y%m%d_%H%M%S}_{args_cli.method}_{args_cli.robot}_{route_name}")
+    overlay = None
+    if OVERLAY:
+        from nav_arena.utils.viewer import DebugOverlay
+
+        overlay = DebugOverlay(goal_xy, tolerance=args_cli.goal_dist)
+        logger.info("Viewport goal/plan overlay requested (UI layer; not rendered into the policy's cameras)")
     episode = EpisodeCfg(
         max_steps=args_cli.max_steps,
         follower=FollowerCfg(max_speed=args_cli.max_speed, goal_tolerance=args_cli.goal_dist),
         output_dir=output,
+        viewer=viewer,
+        overlay=overlay,
+        stall_timeout_s=args_cli.stall_timeout if args_cli.stall_timeout > 0 else None,
     )
     result = run_episode(task, policy, episode)
 

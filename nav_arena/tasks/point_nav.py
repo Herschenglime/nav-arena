@@ -242,6 +242,8 @@ def create_point_nav_env_cfg(
     enable_goal_camera: bool = False,
     render_interval: int | None = None,
     max_tilt: float = 0.6,
+    show_goal_marker: bool = True,
+    scene_queries: bool = False,
 ) -> PointNavEnvCfg:
     """Factory helper to create a fully customized PointNavEnvCfg.
 
@@ -264,6 +266,10 @@ def create_point_nav_env_cfg(
             20 (5 Hz, the learned baselines' planning rate at ``dt=0.01``) when a camera is enabled, since every render
             then also pays for RTX sensor rendering.
         max_tilt: Roll/pitch magnitude in radians beyond which the robot counts as tipped over.
+        show_goal_marker: Draw Isaac Lab's goal-pose arrow in the scene. The arrow is real geometry, so **cameras see
+            it**: a depth planner treats it as an obstacle sitting on its own goal (iPlanner halted 3.5 m out because
+            of it). Disable it whenever a policy consumes camera data.
+        scene_queries: Enable PhysX scene queries (needed by the third-person follow camera's occlusion rays).
 
     Returns:
         Configured PointNavEnvCfg.
@@ -322,6 +328,9 @@ def create_point_nav_env_cfg(
             time_out=False,
         )
     env_cfg.terminations.tipped.params["limit_angle"] = max_tilt
+    env_cfg.commands.pose_2d_command.debug_vis = show_goal_marker
+    if scene_queries:
+        env_cfg.sim.enable_scene_query_support = True
     env_cfg.episode_length_s = episode_length_s
     if render_interval is not None:
         env_cfg.sim.render_interval = render_interval

@@ -74,3 +74,4 @@ def test_keyboard_interrupt_is_a_failure(fake_app):
         with _launch():
             raise KeyboardInterrupt
     assert fake_app.closed_with == [{"exit_code": 1}]
+
