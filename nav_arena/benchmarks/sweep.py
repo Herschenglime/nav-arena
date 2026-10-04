@@ -49,6 +49,7 @@ from nav_arena.benchmarks.spec import (
     VizCfg,
 )
 from nav_arena.utils.logger import get_logger
+from nav_arena.utils.run_dir import clear_recorded_artifacts
 from nav_arena.utils.paths import NAVDP_ROOT, PROJECT_ROOT, RUNS_DIR
 
 logger = get_logger("nav_arena.benchmarks.sweep")
@@ -730,9 +731,9 @@ def _execute_planned_run(
     spec_path = run_dir / "run_spec.json"
     spec_path.write_text(run_spec.to_json(), encoding="utf-8")
 
-    stale_summary = run_dir / "summary.json"
-    if stale_summary.is_file():
-        stale_summary.unlink()
+    removed = clear_recorded_artifacts(run_dir)  # a retried run (--resume) starts from a clean directory
+    if removed:
+        logger.info("Cleared %d recorded file(s) from the previous attempt of %s", removed, run_id)
 
     if timeout_override is not None and timeout_override > 0:
         timeout_s = timeout_override

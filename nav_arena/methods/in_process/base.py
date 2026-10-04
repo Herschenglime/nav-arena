@@ -100,6 +100,20 @@ class InProcessPolicy(ABC):
     def reset(self) -> None:
         """Clear per-episode history (observation memory, stuck detection). Stateless policies do nothing."""
 
+    def reseed(self, seed: int | None) -> None:
+        """Record ``seed`` in the config and seed numpy and torch with it (``None`` leaves the RNGs untouched).
+
+        Called once per episode so a reused policy starts every episode from the same random state.
+        """
+        self.cfg.seed = seed
+        if seed is None:
+            return
+        import numpy as np
+        import torch
+
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+
     @abstractmethod
     def step(self, obs: PolicyObservation) -> Plan:
         """Plan from the current observation.

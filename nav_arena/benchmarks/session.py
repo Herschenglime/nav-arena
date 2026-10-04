@@ -321,8 +321,8 @@ class RunSession:
         if ep is None:
             raise ValueError("No EpisodeSpec provided.")
 
-        if self.policy is not None and hasattr(self.policy, "cfg") and hasattr(self.policy.cfg, "seed"):
-            self.policy.cfg.seed = ep.seed
+        if self.policy is not None:
+            self.policy.reseed(ep.seed)
 
         route_name = ep.route or "custom"
         output = ep.output_dir or (

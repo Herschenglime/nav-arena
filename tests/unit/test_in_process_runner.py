@@ -335,3 +335,45 @@ def test_overlay_receives_the_stop_flag_and_is_recorded_in_settings(tmp_path):
     run_episode(FakeTask(), GoalSeeker(stop=True), _cfg(overlay=overlay, max_steps=30, warmup_steps=0, output_dir=out))
     assert all(stop for _, stop, _ in overlay.updates[1:])
     assert json.loads((out / "settings.json").read_text())["episode"]["overlay"] == "FakeOverlay"
+
+
+def test_recorder_refuses_to_overwrite_a_recorded_run(tmp_path):
+    """Verify an output directory that already holds a recorded run is rejected, while an empty or spec-only one is fine."""
+    from nav_arena.methods.in_process.runner import _Recorder
+
+    class _Policy:
+        name = "fake"
+        plan_hz = 5.0
+        cfg = type("Cfg", (), {})()
+
+    import dataclasses
+
+    @dataclasses.dataclass
+    class _PolicyCfg:
+        pass
+
+    policy = _Policy()
+    policy.cfg = _PolicyCfg()
+    cfg = _cfg()
+
+    spec_only = tmp_path / "spec_only"
+    spec_only.mkdir()
+    (spec_only / "run_spec.json").write_text("{}")
+    _Recorder(spec_only, cfg, policy, {})  # allowed: nothing recorded yet
+
+    finished = tmp_path / "finished"
+    finished.mkdir()
+    (finished / "summary.json").write_text("{}")
+    with pytest.raises(FileExistsError):
+        _Recorder(finished, cfg, policy, {})
+
+
+def test_clear_recorded_artifacts_keeps_unrelated_files(tmp_path):
+    """Verify clearing removes recorder output only, so run_spec.json and logs survive a retry."""
+    from nav_arena.utils.run_dir import clear_recorded_artifacts, recorded_artifacts
+
+    for name in ("settings.json", "steps.jsonl", "summary.json", "rgb_000001.png", "depth_m_000001.npy", "run_spec.json", "worker.log"):
+        (tmp_path / name).write_text("x")
+    assert len(recorded_artifacts(tmp_path)) == 5
+    assert clear_recorded_artifacts(tmp_path) == 5
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["run_spec.json", "worker.log"]

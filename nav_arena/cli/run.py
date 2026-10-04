@@ -30,6 +30,7 @@ from nav_arena.benchmarks.spec import (
 from nav_arena.benchmarks.sweep import check_preflight_processes
 from nav_arena.utils.logger import get_logger
 from nav_arena.utils.paths import RUNS_DIR
+from nav_arena.utils.run_dir import recorded_artifacts
 
 logger = get_logger("nav_arena.cli")
 
@@ -218,14 +219,14 @@ def execute_single_run_process(
         return 1
     timeout_s = float(timeout) if timeout is not None else compute_default_timeout(spec)
 
+    if recorded_artifacts(run_dir):
+        logger.error("%s already holds a recorded run; choose another --output.", run_dir)
+        return 1
     run_dir.mkdir(parents=True, exist_ok=True)
     spec.output_dir = run_dir
     spec_path = run_dir / "run_spec.json"
     spec_path.write_text(spec.to_json(), encoding="utf-8")
-
-    # Drop a stale summary left by an earlier run in the same directory.
     summary_path = run_dir / "summary.json"
-    summary_path.unlink(missing_ok=True)
 
     try:
         outcome = run_worker(spec_path, run_dir / "worker.log", timeout_s, quiet=quiet)

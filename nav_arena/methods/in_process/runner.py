@@ -28,6 +28,7 @@ from typing import Any
 import numpy as np
 
 from nav_arena.utils import get_logger
+from nav_arena.utils.run_dir import recorded_artifacts
 
 from .base import InProcessPolicy, Plan, PolicyObservation
 from .controller import FollowerCfg, body_to_world, follow_path, goal_body_input, world_to_body
@@ -103,7 +104,13 @@ class _Recorder:
         self._next_snapshot = 0.0
         if self.dir is None:
             return
-        self.dir.mkdir(parents=True, exist_ok=True)
+        existing = recorded_artifacts(self.dir)
+        if existing:
+            raise FileExistsError(
+                f"{self.dir} already holds a recorded run ({existing[0].name}, ...); choose another output directory "
+                "or clear it explicitly."
+            )
+        self.dir.mkdir(parents=True, exist_ok=True)  # an empty directory (e.g. holding only run_spec.json) is fine
         settings = dict(
             policy=policy.name, policy_cfg=asdict(policy.cfg), plan_hz=policy.plan_hz, episode=_jsonable(cfg), **extra
         )

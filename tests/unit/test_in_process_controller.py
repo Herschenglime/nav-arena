@@ -89,3 +89,26 @@ def test_follower_trims_already_passed_path():
     v, w = follow_path(path, 3.0)
     assert v > 0
     assert w == pytest.approx(0.0, abs=1e-6)
+
+
+def test_policy_reseed_makes_random_draws_repeatable():
+    """Verify reseed() records the seed and restores identical numpy/torch random state."""
+    import numpy as np
+    import torch
+
+    from nav_arena.methods.in_process.base import InProcessPolicy, InProcessPolicyCfg, Plan
+
+    class Dummy(InProcessPolicy):
+        name = "dummy"
+
+        def step(self, obs):  # pragma: no cover - never planned
+            return Plan(path=np.zeros((1, 3)), stop=False)
+
+    policy = Dummy(InProcessPolicyCfg())
+    policy.reseed(5)
+    first = (np.random.rand(), torch.rand(1).item())
+    policy.reseed(5)
+    second = (np.random.rand(), torch.rand(1).item())
+    assert first == second and policy.cfg.seed == 5
+    policy.reseed(None)
+    assert policy.cfg.seed is None

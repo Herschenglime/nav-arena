@@ -486,32 +486,19 @@ class TestWorkerProcessExecution:
         assert rows[0]["terminal_cause"] == "timeout"
         assert rows[0]["success"] == "False"
 
-    def test_stale_summary_deleted_before_worker_run(self, tmp_path: Path):
-        run_output = tmp_path / "stale_run"
+    def test_existing_recorded_run_is_not_overwritten(self, tmp_path: Path):
+        """Verify an --output directory that already holds a recorded run is refused before any worker starts."""
+        run_output = tmp_path / "finished_run"
         run_output.mkdir(parents=True, exist_ok=True)
-        stale_summary = run_output / "summary.json"
-        stale_summary.write_text(json.dumps({"terminal_cause": "goal_reached", "success": True}), encoding="utf-8")
+        previous = run_output / "summary.json"
+        previous.write_text(json.dumps({"terminal_cause": "goal_reached", "success": True}), encoding="utf-8")
 
-        @contextmanager
-        def mock_managed_process_failing(cmd, timeout=5.0, **popen_kwargs):
-            mock_p = MagicMock()
-            mock_p.stdout = io.StringIO("Fatal error during boot\n")
-            mock_p.wait.return_value = 1  # Crash without writing summary.json
-            yield mock_p
-
-        with patch("nav_arena.benchmarks.launcher.managed_process", side_effect=mock_managed_process_failing):
-            exit_code = main([
-                "run",
-                "--method", "iplanner",
-                "--route", "hall_straight",
-                "--output", str(run_output),
-            ])
+        with patch("nav_arena.benchmarks.launcher.managed_process") as mock_mp:
+            exit_code = main(["run", "--method", "iplanner", "--route", "hall_straight", "--output", str(run_output)])
 
         assert exit_code == 1
-        with (run_output / "results.csv").open() as f:
-            rows = list(csv.DictReader(f))
-        assert rows[0]["terminal_cause"] == "failed"
-        assert rows[0]["success"] == "False"
+        mock_mp.assert_not_called()
+        assert json.loads(previous.read_text())["success"] is True
 
     def test_worker_keyboard_interrupt_handling(self, tmp_path: Path):
         run_output = tmp_path / "sigint_run"

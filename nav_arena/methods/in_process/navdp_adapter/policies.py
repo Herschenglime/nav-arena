@@ -89,11 +89,7 @@ class _NavDPFamilyPolicy(InProcessPolicy):
         if agent is not None:
             self.agent = agent
             return
-        if self.cfg.seed is not None:
-            import torch
-
-            np.random.seed(self.cfg.seed)
-            torch.manual_seed(self.cfg.seed)
+        self.reseed(self.cfg.seed)
         self.agent = self._load_agent()
 
     def _checkpoint(self) -> Path:
