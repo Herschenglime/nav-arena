@@ -683,28 +683,6 @@ class TestCliSweepCommand:
 class TestSweepEdgeCasesAndPreflight:
     """Test pre-flight detection, CSV deduplication, and complex identifier handling."""
 
-    def test_check_preflight_processes_parsing(self):
-        fake_ps = (
-            "USER         PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND\n"
-            "root           1  0.0  0.0  24392 12352 ?        Ss   Sep16   0:57 /sbin/init splash\n"
-            "robopi      1234  0.5  0.1  50000 20000 ?        S    10:00   0:01 python verify_baseline.py --method iplanner\n"
-            "robopi      5678  1.0  0.2  60000 30000 ?        S    10:01   0:02 python -m isaaclab.app\n"
-            "robopi      9999  0.1  0.0  10000  5000 ?        S    10:02   0:00 /usr/local/bin/python /usr/local/bin/isaacsim-mcp\n"
-            "robopi     11111  0.0  0.0   5000  1000 ?        S    10:03   0:00 pytest nav_arena/tests/unit\n"
-        )
-        mock_res = MagicMock()
-        mock_res.stdout = fake_ps
-        with patch("subprocess.run", return_value=mock_res):
-            with patch("os.getpid", return_value=8888):
-                with patch("os.getppid", return_value=7777):
-                    conflicts = check_preflight_processes()
-        conflict_pids = [c[0] for c in conflicts]
-        assert 1234 in conflict_pids
-        assert 5678 in conflict_pids
-        # isaacsim-mcp and pytest should be excluded
-        assert 9999 not in conflict_pids
-        assert 11111 not in conflict_pids
-
     def test_inline_route_with_underscores_in_method_and_robot(self, tmp_path: Path):
         spec = SweepSpec(
             name="underscore_test",

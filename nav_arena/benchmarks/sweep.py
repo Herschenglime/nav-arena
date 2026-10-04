@@ -39,6 +39,7 @@ from nav_arena.benchmarks.manifest import (
     RunStatus,
     _utcnow_iso,
 )
+from nav_arena.benchmarks.guard import check_preflight_processes
 from nav_arena.benchmarks.launcher import WorkerOutcome, compute_default_timeout, run_worker
 from nav_arena.benchmarks.results import RESULTS_CSV_COLUMNS, append_results_row, format_results_row
 from nav_arena.benchmarks.spec import (
@@ -51,58 +52,6 @@ from nav_arena.utils.logger import get_logger
 from nav_arena.utils.paths import NAVDP_ROOT, PROJECT_ROOT, RUNS_DIR
 
 logger = get_logger("nav_arena.benchmarks.sweep")
-
-
-
-def check_preflight_processes() -> list[tuple[int, str]]:
-    """Check running processes for conflicting simulation instances (isaaclab, verify_).
-
-    Returns:
-        List of (pid, command_line) tuples of any active conflicting processes.
-    """
-    try:
-        res = subprocess.run(
-            ["ps", "aux"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-    except Exception as exc:
-        logger.debug("Failed to run ps pre-flight check: %s", exc)
-        return []
-
-    current_pid = os.getpid()
-    parent_pid = os.getppid()
-    conflicts: list[tuple[int, str]] = []
-    patterns = ("verify_", "isaaclab", "nav_arena.benchmarks.worker")
-
-    for line in res.stdout.splitlines()[1:]:
-        line = line.strip()
-        if not line:
-            continue
-        parts = line.split(None, 10)
-        if len(parts) < 11:
-            continue
-        try:
-            pid = int(parts[1])
-        except ValueError:
-            continue
-
-        if pid in (current_pid, parent_pid):
-            continue
-
-        cmd = parts[10]
-        if any(pat in cmd for pat in patterns):
-            if "ps aux" in cmd or "grep " in cmd or "pytest" in cmd or "mcp" in cmd:
-                continue
-            conflicts.append((pid, cmd))
-
-    return conflicts
-
-
-
-
-
 
 
 
