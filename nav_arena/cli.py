@@ -38,91 +38,23 @@ from nav_arena.benchmarks.spec import (
     apply_overrides,
     validate_spec,
 )
+from nav_arena.benchmarks.sweep import (
+    RESULTS_CSV_COLUMNS,
+    SweepSpec,
+    append_results_row,
+    apply_sweep_overrides,
+    check_preflight_processes,
+    compute_default_timeout,
+    execute_sweep,
+    format_results_row,
+    resolve_batch_for_resume,
+    validate_sweep_spec,
+)
 from nav_arena.utils.logger import get_logger
 from nav_arena.utils.paths import RUNS_DIR
 from nav_arena.utils.process import managed_process
 
 logger = get_logger("nav_arena.cli")
-
-RESULTS_CSV_COLUMNS: list[str] = [
-    "batch_id",
-    "run_id",
-    "scene",
-    "robot",
-    "method",
-    "method_family",
-    "route",
-    "seed",
-    "terminal_cause",
-    "success",
-    "time_to_goal_s",
-    "sim_time_s",
-    "path_length_m",
-    "initial_goal_distance_m",
-    "final_goal_distance_m",
-    "plans",
-    "stop_requests",
-    "mean_inference_ms",
-    "wall_time_s",
-    "goal_tolerance",
-    "max_speed",
-    "spec_hash",
-]
-
-
-def check_preflight_processes() -> list[tuple[int, str]]:
-    """Check running processes for conflicting simulation instances (isaaclab or verify_).
-
-    Returns:
-        List of (pid, command_line) tuples of any active conflicting processes.
-    """
-    try:
-        res = subprocess.run(
-            ["ps", "-eo", "pid,args"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-    except Exception as exc:
-        logger.debug("Failed to run ps pre-flight check: %s", exc)
-        return []
-
-    current_pid = os.getpid()
-    parent_pid = os.getppid()
-    conflicts: list[tuple[int, str]] = []
-    patterns = ("isaaclab", "verify_")
-
-    for line in res.stdout.splitlines()[1:]:
-        line = line.strip()
-        if not line:
-            continue
-        parts = line.split(None, 1)
-        if len(parts) < 2:
-            continue
-        try:
-            pid = int(parts[0])
-        except ValueError:
-            continue
-
-        if pid in (current_pid, parent_pid):
-            continue
-
-        cmd = parts[1]
-        if any(pat in cmd for pat in patterns):
-            if "ps -eo" in cmd or "grep " in cmd:
-                continue
-            conflicts.append((pid, cmd))
-
-    return conflicts
-
-
-def compute_default_timeout(spec: RunSpec) -> float:
-    """Calculate default execution timeout in seconds based on episode bounds.
-
-    Formula: (max_steps / 50.0) + stall_timeout_s + 60.0
-    """
-    stall_timeout = spec.limits.stall_timeout_s if spec.limits.stall_timeout_s is not None else 10.0
-    return (spec.limits.max_steps / 50.0) + stall_timeout + 60.0
 
 
 def generate_run_dir(spec: RunSpec, base_dir: Path | None = None) -> Path:
@@ -187,18 +119,6 @@ def format_results_row(
     }
 
 
-def append_results_row(
-    csv_path: Path,
-    row: dict[str, Any],
-) -> None:
-    """Append a result row to results.csv, creating file and header if needed."""
-    csv_path = Path(csv_path)
-    file_exists = csv_path.is_file() and csv_path.stat().st_size > 0
-    with csv_path.open("a", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=RESULTS_CSV_COLUMNS)
-        if not file_exists:
-            writer.writeheader()
-        writer.writerow(row)
 
 
 def _parse_policy_args(items: list[str]) -> dict[str, Any]:
@@ -555,13 +475,178 @@ def create_parser() -> argparse.ArgumentParser:
     )
     _add_run_subcommand_args(run_parser)
 
+def handle_sweep(args: argparse.Namespace) -> int:
+    """Execute the 'sweep' subcommand to run a matrix sweep across benchmarks."""
+    batch_dir: Path | None = None
+    spec: SweepSpec | None = None
+
+    if args.resume:
+        # 1. Check if args.spec points to an existing batch directory or batch file
+        if args.spec:
+            spec_path = Path(args.spec)
+            if spec_path.is_file() and spec_path.name in ("manifest.json", "batch.yaml"):
+                batch_dir = spec_path.parent.resolve()
+            elif spec_path.is_dir() and (spec_path / "manifest.json").is_file():
+                batch_dir = spec_path.resolve()
+            elif spec_path.is_file():
+                try:
+                    spec = SweepSpec.load(spec_path)
+                except Exception as exc:
+                    logger.error("Failed to load sweep spec from '%s': %s", args.spec, exc)
+                    return 1
+                try:
+                    batch_dir = resolve_batch_for_resume(spec, batch_arg=None)
+                except FileNotFoundError as exc:
+                    logger.error("Resume failed: %s", exc)
+                    return 1
+
+        if batch_dir is None:
+            try:
+                batch_dir = resolve_batch_for_resume(spec, batch_arg=args.spec or args.name)
+            except FileNotFoundError as exc:
+                logger.error("Resume failed: %s", exc)
+                return 1
+
+        # Load spec from batch_dir / "batch.yaml" if not already loaded from YAML file
+        batch_yaml = batch_dir / "batch.yaml"
+        if batch_yaml.is_file():
+            try:
+                data = yaml.safe_load(batch_yaml.read_text(encoding="utf-8")) or {}
+                if "spec" in data and isinstance(data["spec"], dict):
+                    saved_spec = SweepSpec.from_dict(data["spec"])
+                    if spec is None:
+                        spec = saved_spec
+            except Exception as exc:
+                logger.warning("Failed to read spec from batch.yaml in %s: %s", batch_dir, exc)
+
+        if spec is None:
+            logger.error("Could not resolve sweep specification for resuming.")
+            return 1
+    else:
+        if args.spec:
+            try:
+                spec = SweepSpec.load(args.spec)
+            except Exception as exc:
+                logger.error("Failed to load sweep spec from '%s': %s", args.spec, exc)
+                return 1
+        else:
+            scene = args.scene or "kujiale_0003"
+            methods = [m.strip() for m in args.methods.split(",")] if args.methods else ["iplanner"]
+            routes = [r.strip() for r in args.routes.split(",")] if args.routes else ["hall_straight"]
+            seeds = [int(s.strip()) for s in args.seeds.split(",")] if args.seeds else [0]
+            robots = [r.strip() for r in args.robots.split(",")] if args.robots else ["dingo"]
+            name = args.name or f"sweep_{scene}"
+            spec = SweepSpec(
+                name=name,
+                scene=scene,
+                robots=robots,
+                methods=methods,
+                routes=routes,
+                seeds=seeds,
+            )
+
+    if spec is None:
+        logger.error("Could not resolve sweep specification.")
+        return 1
+
+    # Extract CLI overrides
+    overrides: dict[str, Any] = {}
+    if args.name is not None:
+        overrides["name"] = args.name
+    if args.scene is not None:
+        overrides["scene"] = args.scene
+    if args.methods is not None:
+        overrides["methods"] = args.methods
+    if args.routes is not None:
+        overrides["routes"] = args.routes
+    if args.seeds is not None:
+        overrides["seeds"] = args.seeds
+    if args.robots is not None:
+        overrides["robots"] = args.robots
+    if args.timeout is not None:
+        overrides["timeout_s"] = args.timeout
+    if args.max_steps is not None:
+        overrides["max_steps"] = args.max_steps
+    if args.goal_dist is not None:
+        overrides["goal_dist"] = args.goal_dist
+    if args.max_speed is not None:
+        overrides["max_speed"] = args.max_speed
+    if args.stall_timeout is not None:
+        overrides["stall_timeout"] = args.stall_timeout
+    if args.gui is not None:
+        overrides["gui"] = args.gui
+    if args.follow_camera is not None:
+        overrides["follow_camera"] = args.follow_camera
+    if args.goal_overlay is not None:
+        overrides["goal_overlay"] = args.goal_overlay
+
+    try:
+        spec = apply_sweep_overrides(spec, overrides, logger=logger)
+    except Exception as exc:
+        logger.error("Failed to apply sweep overrides: %s", exc)
+        return 1
+
+    try:
+        validate_sweep_spec(spec)
+    except ValueError as exc:
+        logger.error("Sweep validation error: %s", exc)
+        return 1
+
+    return execute_sweep(
+        spec,
+        batch_dir=batch_dir,
+        resume=args.resume,
+        force=args.force,
+        quiet=args.quiet,
+        timeout_override=args.timeout,
+    )
+
+
+def _add_sweep_subcommand_args(parser: argparse.ArgumentParser) -> None:
+    """Register CLI arguments for the sweep subcommand."""
+    parser.add_argument("spec", nargs="?", default=None, help="Sweep specification YAML path or batch directory to resume.")
+    parser.add_argument("--scene", type=str, default=None, help="Override scene name.")
+    parser.add_argument("--methods", "--method", type=str, default=None, dest="methods", help="Comma-separated list of methods (e.g. iplanner,navdp).")
+    parser.add_argument("--routes", "--route", type=str, default=None, dest="routes", help="Comma-separated list of routes.")
+    parser.add_argument("--seeds", "--seed", type=str, default=None, dest="seeds", help="Comma-separated list of integer seeds.")
+    parser.add_argument("--robots", "--robot", type=str, default=None, dest="robots", help="Comma-separated list of robots.")
+    parser.add_argument("--name", type=str, default=None, help="Override sweep name.")
+    parser.add_argument("--timeout", type=float, default=None, help="Per-run execution timeout in seconds.")
+    parser.add_argument("--resume", action="store_true", default=False, help="Resume an existing sweep batch.")
+    parser.add_argument("--force", action="store_true", default=False, help="Bypass pre-flight conflict check.")
+    parser.add_argument("--quiet", action="store_true", default=False, help="Suppress worker stdout unless an error occurs.")
+    parser.add_argument("--max-steps", type=int, default=None, help="Maximum control steps.")
+    parser.add_argument("--goal-dist", type=float, default=None, help="Goal tolerance distance in meters.")
+    parser.add_argument("--max-speed", type=float, default=None, help="Path-follower speed limit in m/s.")
+    parser.add_argument("--stall-timeout", type=float, default=None, help="Stall timeout in seconds.")
+    parser.add_argument("--gui", action=argparse.BooleanOptionalAction, default=None, help="Kit GUI viewport (--gui / --no-gui).")
+    parser.add_argument("--follow-camera", action=argparse.BooleanOptionalAction, default=None, help="Follow camera (--follow-camera / --no-follow-camera).")
+    parser.add_argument("--goal-overlay", action=argparse.BooleanOptionalAction, default=None, help="Goal overlay (--goal-overlay / --no-goal-overlay).")
+
+
+def create_parser() -> argparse.ArgumentParser:
+    """Build the top-level argument parser for nav_arena CLI."""
+    parser = argparse.ArgumentParser(
+        prog="nav_arena",
+        description="Unified navigation benchmarking and evaluation framework for Isaac Sim.",
+    )
+    subparsers = parser.add_subparsers(dest="subcommand", metavar="COMMAND")
+
+    # 1. run
+    run_parser = subparsers.add_parser(
+        "run",
+        help="Execute one isolated navigation episode.",
+        description="Execute one isolated navigation episode and record artifacts.",
+    )
+    _add_run_subcommand_args(run_parser)
+
     # 2. sweep (Phase 2B)
     sweep_parser = subparsers.add_parser(
         "sweep",
         help="Execute a batch matrix sweep across methods, robots, routes, and seeds.",
+        description="Execute a batch matrix sweep across methods, robots, routes, and seeds.",
     )
-    sweep_parser.add_argument("spec", nargs="?", default=None, help="Sweep specification YAML path.")
-    sweep_parser.add_argument("--resume", action="store_true", help="Resume an existing sweep batch.")
+    _add_sweep_subcommand_args(sweep_parser)
 
     # 3. runs (Phase 3)
     runs_parser = subparsers.add_parser(
@@ -613,7 +698,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.subcommand == "run":
         return handle_run(args)
 
-    if args.subcommand in ("sweep", "runs", "doctor", "routes", "map"):
+    if args.subcommand == "sweep":
+        return handle_sweep(args)
+
+    if args.subcommand in ("runs", "doctor", "routes", "map"):
         logger.error("Subcommand '%s' is not yet implemented.", args.subcommand)
         return 1
 
