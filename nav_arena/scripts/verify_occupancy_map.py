@@ -43,7 +43,7 @@ from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
 from isaaclab.utils.configclass import configclass
 
 from nav_arena.embodiments.nova_carter import NovaCarterEmbodimentCfg
-from nav_arena.maps import generate_occupancy_map, get_occupancy_map
+from nav_arena.tools.map_generator import generate_occupancy_map, get_occupancy_map
 from nav_arena.scenes.interior_agent import get_open_door_usd, prepare_interior_agent_stage, resolve_interior_agent_usd
 
 

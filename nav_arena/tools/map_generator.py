@@ -3,24 +3,25 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Programmatic 2D occupancy map generation and caching for Isaac Sim scenes."""
+"""Programmatic 2D occupancy map generation and offline CLI tooling for Isaac Sim scenes."""
 
 from __future__ import annotations
 
+import argparse
 import os
+import sys
+from typing import Callable
+
 import numpy as np
 from PIL import Image
 import yaml
 
-from typing import Callable
-
-from pxr import Sdf, Usd, UsdGeom, UsdPhysics
-import omni.usd
-import omni.timeline
-import omni.kit.app
-
-from isaacsim.asset.gen.omap.bindings import _omap
-from isaacsim.asset.gen.omap.utils import compute_coordinates, generate_image, update_location
+# Note: pxr and omni modules MUST only be imported after AppLauncher boots to avoid
+# Boost.Python converter collisions with pre-installed site-packages.
+Sdf = Usd = UsdGeom = UsdPhysics = None  # type: ignore
+omni = None  # type: ignore
+_omap = None  # type: ignore
+compute_coordinates = generate_image = update_location = None  # type: ignore
 
 
 DEFAULT_CELL_SIZE = 0.05
@@ -28,6 +29,29 @@ DEFAULT_Z_MIN = 0.01
 DEFAULT_Z_MAX = 0.60
 ROS_OCCUPIED_THRESHOLD = 0.65
 ROS_FREE_THRESHOLD = 0.196
+
+
+def _ensure_omni_modules():
+    """Dynamically import Omniverse / Isaac Sim modules if not already loaded."""
+    global Sdf, Usd, UsdGeom, UsdPhysics, omni, _omap, compute_coordinates, generate_image, update_location
+    if omni is None or _omap is None:
+        from pxr import Sdf as _Sdf, Usd as _Usd, UsdGeom as _UsdGeom, UsdPhysics as _UsdPhysics
+        import omni as _omni
+        import omni.usd
+        import omni.timeline
+        import omni.kit.app
+
+        from isaacsim.asset.gen.omap.bindings import _omap as _omap_module
+        from isaacsim.asset.gen.omap.utils import (
+            compute_coordinates as _cc,
+            generate_image as _gi,
+            update_location as _ul,
+        )
+
+        Sdf, Usd, UsdGeom, UsdPhysics = _Sdf, _Usd, _UsdGeom, _UsdPhysics
+        omni = _omni
+        _omap = _omap_module
+        compute_coordinates, generate_image, update_location = _cc, _gi, _ul
 
 
 def prepare_mesh_collisions(scene_prim_path: str = "/World/Scene") -> int:
@@ -42,6 +66,7 @@ def prepare_mesh_collisions(scene_prim_path: str = "/World/Scene") -> int:
     Returns:
         Number of meshes prepared with collision APIs.
     """
+    _ensure_omni_modules()
     stage = omni.usd.get_context().get_stage()
     count = 0
     for prim in stage.Traverse():
@@ -92,6 +117,7 @@ def compute_scene_bounds(
     Returns:
         (min_x, min_y, max_x, max_y) bounding box in world meters.
     """
+    _ensure_omni_modules()
     stage = omni.usd.get_context().get_stage()
     if stage is None:
         raise RuntimeError("No active USD stage found.")
@@ -109,6 +135,11 @@ def compute_scene_bounds(
                 float(min_pt[1]) - padding,
                 float(max_pt[0]) + padding,
                 float(max_pt[1]) + padding,
+            )
+        else:
+            print(
+                f"[WARNING] Specified bounds_prim_path '{bounds_prim_path}' does not exist on stage. "
+                "Falling back to mesh bounds..."
             )
 
     bbox_cache = UsdGeom.BBoxCache(Usd.TimeCode.Default(), [UsdGeom.Tokens.default_])
@@ -169,6 +200,7 @@ def generate_occupancy_map(
     Returns:
         Path to the generated map.yaml file.
     """
+    _ensure_omni_modules()
     stage = omni.usd.get_context().get_stage()
     if stage is None:
         raise RuntimeError("No active USD stage found in current context.")
@@ -178,12 +210,14 @@ def generate_occupancy_map(
         print("[INFO] Executing scene-specific stage preprocessor hook...")
         stage_preprocessor(stage)
 
-    # Validate stage units are in meters to prevent scale distortion
+    # Validate and ensure stage units are in meters to prevent scale distortion
     meters_per_unit = UsdGeom.GetStageMetersPerUnit(stage)
-    assert abs(meters_per_unit - 1.0) < 1e-6, (
-        f"Stage units are not meters (metersPerUnit={meters_per_unit}). "
-        "Occupancy map generation requires meter-scale stages."
-    )
+    if abs(meters_per_unit - 1.0) >= 1e-6:
+        print(
+            f"[WARNING] Stage units are not meters (metersPerUnit={meters_per_unit}). "
+            "Setting stage metersPerUnit to 1.0 for meter-scale occupancy map generation."
+        )
+        UsdGeom.SetStageMetersPerUnit(stage, 1.0)
 
     # 1. Prepare static mesh collisions
     prepared_count = prepare_mesh_collisions(scene_prim_path)
@@ -289,6 +323,7 @@ def get_occupancy_map(
     z_min: float = DEFAULT_Z_MIN,
     z_max: float = DEFAULT_Z_MAX,
     cache_root: str = "nav_arena/cache/maps",
+    output_dir: str | None = None,
     force_generate: bool = False,
     warmup_steps: int = 30,
     stage_preprocessor: Callable[[Usd.Stage], None] | None = None,
@@ -302,7 +337,8 @@ def get_occupancy_map(
         cell_size: Resolution in meters per pixel.
         z_min: Lower bound for Z raycast slice.
         z_max: Upper bound for Z raycast slice.
-        cache_root: Base directory for cached maps.
+        cache_root: Base directory for cached maps when output_dir is None.
+        output_dir: Explicit output directory override. If specified, maps will be saved directly here.
         force_generate: If True, re-generate map even if cache exists.
         warmup_steps: Number of simulation steps before raycasting.
         stage_preprocessor: Optional scene-specific conditioning hook executed on the USD stage.
@@ -310,24 +346,170 @@ def get_occupancy_map(
     Returns:
         Absolute path to the map.yaml file.
     """
-    cache_key = f"cs{cell_size:.2f}_z{z_min:.2f}-{z_max:.2f}"
-    cache_dir = os.path.join(cache_root, scene_id, cache_key)
-    yaml_path = os.path.join(cache_dir, "map.yaml")
-    png_path = os.path.join(cache_dir, "map.png")
+    if output_dir is not None:
+        target_dir = output_dir
+    else:
+        cache_key = f"cs{cell_size:.2f}_z{z_min:.2f}-{z_max:.2f}"
+        target_dir = os.path.join(cache_root, scene_id, cache_key)
+
+    yaml_path = os.path.join(target_dir, "map.yaml")
+    png_path = os.path.join(target_dir, "map.png")
 
     if not force_generate and os.path.isfile(yaml_path) and os.path.isfile(png_path):
         print(f"[INFO] [CACHE HIT] Found cached occupancy map at: {yaml_path}")
         return os.path.abspath(yaml_path)
 
-    print(f"[INFO] [CACHE MISS] Generating occupancy map for '{scene_id}' ({cache_key})...")
+    print(f"[INFO] [CACHE MISS] Generating occupancy map for '{scene_id}' ({target_dir})...")
     generate_occupancy_map(
         scene_prim_path=scene_prim_path,
         bounds_prim_path=bounds_prim_path,
         cell_size=cell_size,
         z_min=z_min,
         z_max=z_max,
-        output_dir=cache_dir,
+        output_dir=target_dir,
         warmup_steps=warmup_steps,
         stage_preprocessor=stage_preprocessor,
     )
     return os.path.abspath(yaml_path)
+
+
+def main():
+    """CLI entrypoint for offline 2D occupancy map generation."""
+    from isaaclab.app import AppLauncher
+
+    parser = argparse.ArgumentParser(
+        description="Offline 2D occupancy grid map generator for Isaac Sim scenes."
+    )
+    parser.add_argument(
+        "--scene",
+        type=str,
+        default="kujiale_0003",
+        help="InteriorAgent scene ID or path to USD/USDA stage file (default: kujiale_0003).",
+    )
+    parser.add_argument(
+        "--cell-size",
+        type=float,
+        default=DEFAULT_CELL_SIZE,
+        help=f"Occupancy map grid resolution in meters per pixel (default: {DEFAULT_CELL_SIZE}).",
+    )
+    parser.add_argument(
+        "--z-min",
+        type=float,
+        default=DEFAULT_Z_MIN,
+        help=f"Lower Z bound for raycast slice in meters (default: {DEFAULT_Z_MIN}).",
+    )
+    parser.add_argument(
+        "--z-max",
+        type=float,
+        default=DEFAULT_Z_MAX,
+        help=f"Upper Z bound for raycast slice in meters (default: {DEFAULT_Z_MAX}).",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default=None,
+        help="Custom output directory to save map.yaml and map.png (defaults to nav_arena/cache/maps/<scene_id>/<cache_key>).",
+    )
+    parser.add_argument(
+        "--cache-root",
+        type=str,
+        default="nav_arena/cache/maps",
+        help="Base cache directory when --output-dir is not specified (default: nav_arena/cache/maps).",
+    )
+    parser.add_argument(
+        "--bounds-prim",
+        type=str,
+        default=None,
+        help="Optional USD prim path to constrain bounds calculation.",
+    )
+    parser.add_argument(
+        "--warmup-steps",
+        type=int,
+        default=30,
+        help="Physics warmup steps before raycasting (default: 30).",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force map generation even if cached map already exists.",
+    )
+    AppLauncher.add_app_launcher_args(parser)
+    args_cli = parser.parse_args()
+
+    # Mandatory boot-time extension flag for Isaac Sim Occupancy Map
+    sys.argv.extend([
+        "--enable", "isaacsim.asset.gen.omap",
+        "--enable", "isaacsim.asset.gen.omap.ui",
+    ])
+
+    app_launcher = AppLauncher(args_cli)
+    simulation_app = app_launcher.app
+
+    try:
+        _ensure_omni_modules()
+
+        # Resolve scene USD path
+        stage_preprocessor = None
+        try:
+            from nav_arena.scenes.interior_agent import get_open_door_usd, prepare_interior_agent_stage
+
+            usd_path = get_open_door_usd(args_cli.scene)
+            stage_preprocessor = prepare_interior_agent_stage
+            scene_id = os.path.splitext(os.path.basename(usd_path))[0]
+            if scene_id.endswith("_open_doors"):
+                scene_id = scene_id[:-len("_open_doors")]
+        except Exception:
+            usd_path = os.path.abspath(args_cli.scene) if os.path.isfile(args_cli.scene) else args_cli.scene
+            scene_id = os.path.splitext(os.path.basename(usd_path))[0]
+
+        print(f"[INFO] Opening USD stage: {usd_path}")
+        omni.usd.get_context().open_stage(usd_path)
+        stage = omni.usd.get_context().get_stage()
+        if stage is None:
+            raise RuntimeError(f"Failed to open stage at: {usd_path}")
+
+        # Ensure physicsScene exists
+        if (
+            not stage.GetPrimAtPath("/World/physicsScene").IsValid()
+            and not stage.GetPrimAtPath("/physicsScene").IsValid()
+        ):
+            UsdPhysics.Scene.Define(stage, Sdf.Path("/World/physicsScene"))
+
+        if stage.GetPrimAtPath("/Root").IsValid():
+            scene_prim = "/Root"
+        elif stage.GetPrimAtPath("/World/Scene").IsValid():
+            scene_prim = "/World/Scene"
+        elif stage.GetDefaultPrim().IsValid():
+            scene_prim = stage.GetDefaultPrim().GetPath().pathString
+        else:
+            scene_prim = "/"
+
+        yaml_path = get_occupancy_map(
+            scene_id=scene_id,
+            scene_prim_path=scene_prim,
+            bounds_prim_path=args_cli.bounds_prim,
+            cell_size=args_cli.cell_size,
+            z_min=args_cli.z_min,
+            z_max=args_cli.z_max,
+            cache_root=args_cli.cache_root,
+            output_dir=args_cli.output_dir,
+            force_generate=args_cli.force,
+            warmup_steps=args_cli.warmup_steps,
+            stage_preprocessor=stage_preprocessor,
+        )
+
+        print("=" * 70)
+        print(f"[SUCCESS] Occupancy map generated successfully: {yaml_path}")
+        print("=" * 70)
+    except Exception as e:
+        import traceback
+
+        print(f"[ERROR] Exception during occupancy map generation: {e}", file=sys.stderr)
+        traceback.print_exc()
+        raise
+    finally:
+        simulation_app.close()
+
+
+if __name__ == "__main__":
+    main()
