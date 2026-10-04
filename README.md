@@ -176,66 +176,13 @@ The codebase is organized into cleanly decoupled subsystems:
 
 ---
 
-## 6. Core Frameworks & Developer Infrastructure
-
-### SimulationApp Lifecycle Management (`nav_arena.core`)
-Omniverse Kit requires ActionGraph schemas and ROS 2 bridge extensions to be declared in `sys.argv` *before* `AppLauncher` is instantiated. The [`launch_simulation_app`](file:///home/robopi/simulation/nav_arena/nav_arena/core/app.py) context manager encapsulates this requirement:
-
-```python
-from nav_arena.core import launch_simulation_app
-
-# Automatically injects --enable omni.graph, isaacsim.ros2.bridge, etc.
-with launch_simulation_app(args_cli, enable_ros2=True, livestream=True) as simulation_app:
-    # Build stage, construct ActionGraphs, step simulation
-    ...
-```
-
-### Structured Logging Framework (`ArenaLogger`)
-The [`ArenaLogger`](file:///home/robopi/simulation/nav_arena/nav_arena/utils/logger.py) framework standardizes logging across all scripts and tests:
-- Custom `SUCCESS` severity level ($25$, between `INFO` and `WARNING`).
-- Clean visual formatting: ANSI colors, elapsed execution timestamps, and suppression of noisy third-party loggers (e.g. `rclpy`, `urdf_parser_py`).
-- Automatic bridging to Omniverse Carbonite log handlers (`carb.log_info`, `carb.log_warn`, `carb.log_error`) when running inside Isaac Sim.
-- Verification assertion helpers: `logger.section(title)`, `logger.check(name, passed, detail)`, and `logger.success(msg)`.
-
-```python
-import argparse
-from nav_arena.utils import add_logger_args, configure_logging, get_logger
-
-parser = argparse.ArgumentParser()
-add_logger_args(parser)  # Adds --log-level {DEBUG,INFO,SUCCESS,WARNING,ERROR,CRITICAL}
-args = parser.parse_args()
-
-configure_logging(args.log_level)
-logger = get_logger("my_component")
-
-logger.section("INITIALIZING BENCHMARK")
-logger.info("Setting up simulation environment...")
-logger.check("Sensor initialized", lidar is not None, "360 rays active")
-logger.success("Benchmark completed successfully!")
-```
-
-### Offline 2D Occupancy Map Generation (`nav_arena.tools.map_generator`)
-Generates ROS 2-standard 2D occupancy grid maps (`map.yaml` and `map.png`) directly from USD collision meshes across an obstacle height slice (default: $0.01\,\text{m}$ to $0.60\,\text{m}$) without requiring manual SLAM:
-
-```bash
-source setup.env
-# Run map generator on default scene (kujiale_0003) with 0.05m resolution
-python -u -m nav_arena.tools.map_generator --scene kujiale_0003 --cell-size 0.05
-
-# Force regeneration with custom height bounds
-python -u -m nav_arena.tools.map_generator --scene kujiale_0003 --z-min 0.02 --z-max 0.80 --force
-```
-
-Maps are automatically cached to `cache/maps/<scene_id>/cs<cell_size>_z<z_min>-<z_max>/` and dynamically located by Nav2 bringup.
-
----
-
-## 7. Repository Layout
+## 6. Repository Layout
 
 ```text
 nav_arena/
 ├── pyproject.toml                     # Package specification (editable pip install)
 ├── README.md                          # Project documentation and architecture guide
+├── CONTRIBUTING.md                    # Developer guidelines, primitives, and invariants
 ├── cache/                             # Generated runtime caches (git-ignored)
 │   ├── maps/                          # Cached 2D occupancy grids (PNG + YAML)
 │   └── scenes/                        # Conditioned USD delta layers (e.g. open_doors)
@@ -284,13 +231,10 @@ nav_arena/
 
 ---
 
-## 8. Implementation Invariants & Technical Notes
+## 7. Development & Contributing
 
-- **Quaternion Ordering**: Isaac Lab's `AssetBaseCfg.InitialStateCfg.rot` strictly expects **`(x, y, z, w)`**. Identity rotation is `(0.0, 0.0, 0.0, 1.0)`. Passing `(1.0, 0.0, 0.0, 0.0)` rolls the asset 180° around the X-axis (inverting it).
-- **Spawn Ground Clearance**: Mobile robots must spawn with clearance (e.g. `pos=(0.0, 0.0, 0.25)`) to avoid violent PhysX collision depenetration impulses on step 0.
-- **OmniGraph Extension Booting**: Any script creating OmniGraphs or ROS 2 bridge nodes must declare extensions before `AppLauncher` boots. Use [`launch_simulation_app`](file:///home/robopi/simulation/nav_arena/nav_arena/core/app.py) to manage this automatically.
-- **USD Delta Layers & Raycaster Static BVH**: Isaac Lab's `MultiMeshRayCaster` bakes its static triangle BVH (`merge_prim_meshes=True`) at environment initialization. Calling `prim.SetActive(False)` *after* stage load drops PhysX collision, but **does not rebuild the raycaster BVH**. To open doors or alter geometry for sensors, scenes are pre-conditioned before load using non-destructive USD delta layers (`subLayerPaths` via `get_preprocessed_usd`).
-- **ROS 2 Concurrency & Worker Threads**: Coupling asynchronous DDS waitsets to a synchronous physics loop via single-step `spin_once(timeout_sec=0.0)` starves service futures and drops `/cmd_vel` callbacks under rendering load. ROS 2 callback dispatch runs on a dedicated worker thread via [`BackgroundRos2Executor`](file:///home/robopi/simulation/nav_arena/nav_arena/ros2/executor.py).
-- **Standard Coordinate Frames (REP-105)**: The bridge strictly maintains the REP-105 transform tree `map -> odom -> base_link -> chassis_link -> lidar_link`. Odometry publishes `odom -> base_link`, and AMCL or the static state publisher provides `map -> odom`.
-- **Latched Topic QoS**: Task state topics that publish once per episode (e.g., `/goal_pose` and `/goal_reached`) use `TRANSIENT_LOCAL` durability with depth 1 to prevent late-joining subscribers from missing signals.
-- **Doorway Costmap Buffers**: In residential scenes with $0.65 - 0.80\,\text{m}$ doorways, Nav2 costmaps configure tight footprint padding ($0.01\,\text{m}$) and an inflation radius ($0.35\,\text{m}$) with decay $\alpha = 3.0 / 4.0$ to provide a clean zero-cost corridor through narrow passages.
+For guidelines on adding new components, architectural boundaries, developer primitives, and test standards, refer to [`CONTRIBUTING.md`](CONTRIBUTING.md):
+- **Developer Primitives**: Lifecycle management ([`launch_simulation_app`](file:///home/robopi/simulation/nav_arena/nav_arena/core/app.py)), structured logging ([`ArenaLogger`](file:///home/robopi/simulation/nav_arena/nav_arena/utils/logger.py)), subprocess groups ([`managed_process`](file:///home/robopi/simulation/nav_arena/nav_arena/utils/process.py)), and background concurrency ([`BackgroundRos2Executor`](file:///home/robopi/simulation/nav_arena/nav_arena/ros2/executor.py)).
+- **Physics & USD Invariants**: Quaternion conventions `(x, y, z, w)`, minimum spawn clearance, and non-destructive USD composition delta layers.
+- **Testing Rules**: L1 CPU-only test isolation standards and pytest marker conventions.
+
