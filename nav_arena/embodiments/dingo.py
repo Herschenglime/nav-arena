@@ -28,53 +28,71 @@ DINGO_USD_PATH = str(resolve_path("NAV_ARENA_DINGO_USD", NAVDP_ROOT / "assets/ro
 # Stage Patch
 ##
 
-def dingo_stage_patch(stage: Any) -> None:
-    """Apply stage patches for Clearpath Dingo embodiment.
+_PHYSX_MATERIAL_API = "PhysxMaterialAPI"
+_FRICTION_COMBINE_ATTR = "physxMaterial:frictionCombineMode"
 
-    1. Deactivate embedded GroundPlane to prevent collision conflicts with scene floors.
-    2. Set caster wheel friction combine mode to 'min' so zero caster friction is preserved,
-       preventing passive caster drag and drive-wheel slippage.
+
+def _apply_min_friction_combine(prim: Any) -> None:
+    """Author ``PhysxMaterialAPI`` with ``frictionCombineMode = "min"`` on a material prim.
+
+    Written as plain USD (``apiSchemas`` metadata plus the attribute) rather than through
+    ``pxr.PhysxSchema``, which only exists inside a running Kit app. The result is identical to
+    ``PhysxSchema.PhysxMaterialAPI.Apply(prim).CreateFrictionCombineModeAttr("min")``.
+    """
+    from pxr import Sdf
+
+    schemas = Sdf.TokenListOp()
+    existing = prim.GetMetadata("apiSchemas")
+    items = list(existing.GetAddedOrExplicitItems()) if existing else []
+    if _PHYSX_MATERIAL_API not in items:
+        items.append(_PHYSX_MATERIAL_API)
+    schemas.prependedItems = items
+    prim.SetMetadata("apiSchemas", schemas)
+    prim.CreateAttribute(_FRICTION_COMBINE_ATTR, Sdf.ValueTypeNames.Token).Set("min")
+
+
+def dingo_stage_patch(stage: Any) -> None:
+    """Apply stage patches for the Clearpath Dingo embodiment.
+
+    1. Deactivate the Dingo asset's embedded ``GroundPlane`` so it does not collide with (or
+       replace) the scene floor.
+    2. Set the caster wheel's friction combine mode to ``min``. The asset models its passive caster
+       as a frictionless sphere; averaging that zero friction with the floor's would make the caster
+       drag and the drive wheels slip, whereas ``min`` preserves zero friction at the contact.
+
+    Matches every robot instance (``/World/Robot``, cloned ``/World/envs/env_*/Robot``, or a
+    standalone ``/dingo`` root). Must run after the robot is spawned and before physics is
+    initialized, e.g. from a ``prestartup`` event.
+
+    Args:
+        stage: The USD stage holding the spawned Dingo robot(s).
+
+    Raises:
+        ValueError: If ``stage`` is None.
+        RuntimeError: If no Dingo caster material is found, which means the robot is not spawned
+            yet or the asset layout changed.
     """
     if stage is None:
-        return
+        raise ValueError("dingo_stage_patch requires a USD stage")
 
-    # 1. Direct path check (template or non-cloned /World/Robot)
-    ground = stage.GetPrimAtPath("/World/Robot/GroundPlane")
-    if ground.IsValid():
-        ground.SetActive(False)
+    grounds, casters = [], []
+    for prim in stage.Traverse():
+        path = prim.GetPath().pathString
+        segments = path.split("/")[1:]
+        if path.endswith("/GroundPlane") and any(seg in ("Robot", "dingo") for seg in segments[:-1]):
+            grounds.append(prim)
+        elif path.endswith("/PhysicsMaterials/caster_wheel"):
+            casters.append(prim)
 
-    caster = stage.GetPrimAtPath("/World/Robot/PhysicsMaterials/caster_wheel")
-    if caster.IsValid():
-        try:
-            from pxr import PhysxSchema
-
-            PhysxSchema.PhysxMaterialAPI.Apply(caster).CreateFrictionCombineModeAttr("min")
-        except (ImportError, AttributeError):
-            pass
-
-    # 2. Traverse stage for cloned environments (e.g. /World/envs/env_0/Robot)
-    #    or direct root /dingo paths
-    try:
-        prims = list(stage.Traverse())
-    except (AttributeError, TypeError):
-        prims = []
-
-    for prim in prims:
-        try:
-            path_str = prim.GetPath().pathString
-        except AttributeError:
-            continue
-        if path_str == "/World/Robot/GroundPlane":
-            continue
-        if path_str.endswith("/GroundPlane") and ("Robot" in path_str or "dingo" in path_str):
-            prim.SetActive(False)
-        elif path_str.endswith("/PhysicsMaterials/caster_wheel") and path_str != "/World/Robot/PhysicsMaterials/caster_wheel":
-            try:
-                from pxr import PhysxSchema
-
-                PhysxSchema.PhysxMaterialAPI.Apply(prim).CreateFrictionCombineModeAttr("min")
-            except (ImportError, AttributeError):
-                pass
+    if not casters:
+        raise RuntimeError(
+            "dingo_stage_patch found no '<robot>/PhysicsMaterials/caster_wheel' prim; "
+            "spawn the Dingo before patching the stage."
+        )
+    for prim in grounds:
+        prim.SetActive(False)
+    for prim in casters:
+        _apply_min_friction_combine(prim)
 
 
 ##
@@ -148,6 +166,8 @@ class DingoEmbodimentCfg(RobotEmbodimentCfg):
     max_angular_speed: float = 3.0
     base_frame: str = "base_link"
     chassis_frame: str = "chassis_link"
+    # The Dingo USD has a single rigid body: chassis colliders, caster and sensors all live on base_link.
+    body_link: str = "base_link"
     lidar_frame: str = "lidar_link"
     camera_frame: str = "camera_link"
     sensor_height: float = 0.30

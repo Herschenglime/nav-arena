@@ -11,7 +11,6 @@ import ast
 from pathlib import Path
 import subprocess
 import sys
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -61,6 +60,7 @@ def test_get_nova_carter_embodiment():
     assert cfg.max_angular_speed == 3.0
     assert cfg.base_frame == "base_link"
     assert cfg.chassis_frame == "chassis_link"
+    assert cfg.body_link == "chassis_link"
     assert cfg.lidar_frame == "lidar_link"
     assert cfg.camera_frame == "camera_link"
     assert cfg.sensor_height == 0.35
@@ -85,6 +85,8 @@ def test_get_dingo_embodiment():
     assert cfg.max_angular_speed == 3.0
     assert cfg.base_frame == "base_link"
     assert cfg.chassis_frame == "chassis_link"
+    # The Dingo USD has one rigid body; colliders and sensors attach to base_link.
+    assert cfg.body_link == "base_link"
     assert cfg.lidar_frame == "lidar_link"
     assert cfg.camera_frame == "camera_link"
     assert cfg.sensor_height == 0.30
@@ -150,74 +152,78 @@ def test_clear_registry_and_restore():
     assert "dingo" in list_embodiments()
 
 
-def test_dingo_stage_patch_mock(monkeypatch):
-    """Verify dingo_stage_patch deactivates GroundPlane and sets caster friction combine mode."""
-    mock_stage = MagicMock()
-    mock_ground = MagicMock()
-    mock_ground.IsValid.return_value = True
-    mock_caster = MagicMock()
-    mock_caster.IsValid.return_value = True
+def _dingo_stage(*roots: str):
+    """Build an in-memory stage with one Dingo-like robot (ground plane + caster material) per root."""
+    from pxr import Usd
 
-    def get_prim_at_path(path: str):
-        if path == "/World/Robot/GroundPlane":
-            return mock_ground
-        if path == "/World/Robot/PhysicsMaterials/caster_wheel":
-            return mock_caster
-        invalid = MagicMock()
-        invalid.IsValid.return_value = False
-        return invalid
-
-    mock_stage.GetPrimAtPath.side_effect = get_prim_at_path
-    mock_stage.Traverse.return_value = []
-
-    # Mock pxr.PhysxSchema safely via monkeypatch so sys.modules is restored
-    mock_physx = MagicMock()
-    mock_material_api = MagicMock()
-    mock_physx.PhysxMaterialAPI.Apply.return_value = mock_material_api
-
-    mock_pxr = MagicMock()
-    mock_pxr.PhysxSchema = mock_physx
-    monkeypatch.setitem(sys.modules, "pxr", mock_pxr)
-    monkeypatch.setitem(sys.modules, "pxr.PhysxSchema", mock_physx)
-
-    dingo_stage_patch(mock_stage)
-
-    mock_ground.SetActive.assert_called_once_with(False)
-    mock_physx.PhysxMaterialAPI.Apply.assert_called_once_with(mock_caster)
-    mock_material_api.CreateFrictionCombineModeAttr.assert_called_once_with("min")
+    stage = Usd.Stage.CreateInMemory()
+    for root in roots:
+        stage.DefinePrim(f"{root}/GroundPlane", "Xform")
+        stage.DefinePrim(f"{root}/GroundPlane/CollisionPlane", "Plane")
+        stage.DefinePrim(f"{root}/PhysicsMaterials", "Scope")
+        stage.DefinePrim(f"{root}/PhysicsMaterials/caster_wheel", "Material")
+        stage.DefinePrim(f"{root}/PhysicsMaterials/driving_wheels", "Material")
+    return stage
 
 
-def test_dingo_stage_patch_cloned_env(monkeypatch):
-    """Verify dingo_stage_patch handles cloned env paths (e.g. /World/envs/env_0/Robot)."""
-    mock_stage = MagicMock()
-    mock_stage.GetPrimAtPath.return_value.IsValid.return_value = False
+def _friction_combine(stage, path: str):
+    attr = stage.GetPrimAtPath(path).GetAttribute("physxMaterial:frictionCombineMode")
+    return attr.Get() if attr else None
 
-    mock_ground = MagicMock()
-    mock_ground.GetPath.return_value.pathString = "/World/envs/env_0/Robot/GroundPlane"
 
-    mock_caster = MagicMock()
-    mock_caster.GetPath.return_value.pathString = "/World/envs/env_0/Robot/PhysicsMaterials/caster_wheel"
+def test_dingo_stage_patch_single_robot():
+    """Verify the patch disables the embedded ground plane and sets caster friction combine to 'min'."""
+    stage = _dingo_stage("/World/Robot")
+    dingo_stage_patch(stage)
 
-    mock_default_ground = MagicMock()
-    mock_default_ground.GetPath.return_value.pathString = "/World/defaultGroundPlane"
+    assert not stage.GetPrimAtPath("/World/Robot/GroundPlane").IsActive()
+    caster = stage.GetPrimAtPath("/World/Robot/PhysicsMaterials/caster_wheel")
+    assert _friction_combine(stage, "/World/Robot/PhysicsMaterials/caster_wheel") == "min"
+    assert "PhysxMaterialAPI" in caster.GetMetadata("apiSchemas").GetAddedOrExplicitItems()
+    # Only the caster is modified; the drive-wheel material keeps its default combine behavior.
+    assert _friction_combine(stage, "/World/Robot/PhysicsMaterials/driving_wheels") is None
 
-    mock_stage.Traverse.return_value = [mock_ground, mock_caster, mock_default_ground]
 
-    mock_physx = MagicMock()
-    mock_material_api = MagicMock()
-    mock_physx.PhysxMaterialAPI.Apply.return_value = mock_material_api
+def test_dingo_stage_patch_cloned_envs_and_scene_floor():
+    """Verify cloned env robots are patched while unrelated scene ground planes stay active."""
+    stage = _dingo_stage("/World/envs/env_0/Robot", "/World/envs/env_1/Robot", "/dingo")
+    stage.DefinePrim("/World/defaultGroundPlane", "Xform")
+    stage.DefinePrim("/World/Scene/GroundPlane", "Xform")
+    dingo_stage_patch(stage)
 
-    mock_pxr = MagicMock()
-    mock_pxr.PhysxSchema = mock_physx
-    monkeypatch.setitem(sys.modules, "pxr", mock_pxr)
-    monkeypatch.setitem(sys.modules, "pxr.PhysxSchema", mock_physx)
+    for root in ("/World/envs/env_0/Robot", "/World/envs/env_1/Robot", "/dingo"):
+        assert not stage.GetPrimAtPath(f"{root}/GroundPlane").IsActive()
+        assert _friction_combine(stage, f"{root}/PhysicsMaterials/caster_wheel") == "min"
+    assert stage.GetPrimAtPath("/World/defaultGroundPlane").IsActive()
+    assert stage.GetPrimAtPath("/World/Scene/GroundPlane").IsActive()
 
-    dingo_stage_patch(mock_stage)
 
-    mock_ground.SetActive.assert_called_once_with(False)
-    mock_default_ground.SetActive.assert_not_called()
-    mock_physx.PhysxMaterialAPI.Apply.assert_called_once_with(mock_caster)
-    mock_material_api.CreateFrictionCombineModeAttr.assert_called_once_with("min")
+def test_dingo_stage_patch_is_idempotent_and_preserves_schemas():
+    """Verify re-applying the patch neither duplicates the API schema nor drops existing ones."""
+    from pxr import Sdf
+
+    stage = _dingo_stage("/World/Robot")
+    caster = stage.GetPrimAtPath("/World/Robot/PhysicsMaterials/caster_wheel")
+    existing = Sdf.TokenListOp()
+    existing.prependedItems = ["PhysicsMaterialAPI"]
+    caster.SetMetadata("apiSchemas", existing)
+
+    dingo_stage_patch(stage)
+    dingo_stage_patch(stage)
+
+    items = list(caster.GetMetadata("apiSchemas").GetAddedOrExplicitItems())
+    assert items.count("PhysxMaterialAPI") == 1
+    assert "PhysicsMaterialAPI" in items
+
+
+def test_dingo_stage_patch_fails_loudly_when_robot_missing():
+    """Verify a stage without a spawned Dingo raises instead of silently doing nothing."""
+    from pxr import Usd
+
+    with pytest.raises(RuntimeError, match="caster_wheel"):
+        dingo_stage_patch(Usd.Stage.CreateInMemory())
+    with pytest.raises(ValueError):
+        dingo_stage_patch(None)
 
 
 def test_register_embodiment_decorator():

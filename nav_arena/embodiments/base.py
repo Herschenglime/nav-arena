@@ -32,6 +32,10 @@ class RobotEmbodimentCfg:
     max_angular_speed: float = 3.0
     base_frame: str = "base_link"
     chassis_frame: str = "chassis_link"
+    # USD link (relative to the robot root prim) carrying the chassis colliders; contact and
+    # LiDAR sensors attach here. Distinct from the TF frame names above, which the URDF
+    # generator synthesizes independently of the USD hierarchy.
+    body_link: str = "chassis_link"
     lidar_frame: str = "lidar_link"
     camera_frame: str = "camera_link"
     sensor_height: float = 0.35
