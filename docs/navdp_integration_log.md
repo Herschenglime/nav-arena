@@ -27,6 +27,10 @@ _(none yet)_
 | D10 | Labmate's `follow_path` ported verbatim (as `FollowerCfg` + `follow_path`); his `wheel_speeds` dropped in favor of `diff_drive_ik` / `DifferentialDriveAction` | Avoids duplicate kinematics; his follower is what produced his working runs | — |
 | D11 | Registry names use underscores (`x_navdp`); hyphenated upstream spellings accepted | Matches the original plan and Python identifiers | — |
 | D12 | Policy `seed` defaults to 0 (torch + numpy seeded at construction) | NavDP diffusion sampling is stochastic; makes runs repeatable | `seed=None` |
+| D14 | Collision detection for robots with `ground_contact_on_body` (Dingo) uses lateral (XY) contact force only (`lateral_contact`) | Measured: Dingo `base_link` reads ~17.7 N net force just resting on its caster, which would trip the Carter-style any-force check at t=0. Free-drive lateral force is 0.000 N; wall impact still detected | set `ground_contact_on_body=False` |
+| D15 | Dingo's stage patch runs as a `prestartup` event, so `scene.replicate_physics=False` is set for patched embodiments | Isaac Lab raises if a prestartup event is used with replication on. Irrelevant for single-env benchmarks; multi-env Dingo scenes lose physics replication (slower setup) | — |
+| D16 | Added a `tipped` termination (`mdp.bad_orientation`, 0.6 rad) to all envs, incl. Carter | Port of the labmate's `fell_or_tipped` stop; also adds `get_terminal_cause()` | `max_tilt` |
+| D17 | `render_interval` defaults to 20 (5 Hz at dt=0.01) when a camera is enabled, else 3 | Each render also pays for RTX camera rendering; baselines plan at 5 Hz. GUI users can pass a smaller value | `render_interval=` |
 | D13 | Moved Nav2 to `methods/ros2/nav2`; also updated `verify_tf_tree.py`, which the original plan missed | It referenced the old path | — |
 
 ## Progress
@@ -36,7 +40,7 @@ _(none yet)_
 - [x] Dependencies + pinned requirements — `e8dc139`
 - [x] Phase 2 — RGB-D camera + multi-robot verify_embodiment (headless run: Dingo+camera PASS, Carter PASS)
 - [x] Phase 3 — methods restructure + NavDP adapter port (129 unit tests; real-model smoke tests on all five)
-- [ ] Phase 4 — generalized PointNavTask
+- [x] Phase 4 — generalized PointNavTask (headless: Carter + Dingo/camera PASS; 3 existing integration tests PASS)
 - [ ] Phase 5 — episode runner, verify_baseline, Dingo integration test
 
 ## Findings / surprises
@@ -59,3 +63,13 @@ _(none yet)_
   the labmate's JSON; I recorded the hash of the local converted file (`b801f444...`), whose original source is unknown.
 - **Phase 3 / spec drift:** the pinned dependency list also covers VIPlanner's stack, which is already installed
   (mmcv wheel copied from `alex-spark`, `mmcv.ops` loads).
+
+- **Phase 4 / measured Dingo contact behavior:** `base_link` net force while driving backward into a wall read 17-18 N
+  (mostly the caster's vertical support); lateral force during free driving 0.000 N. The wall impact was detected at
+  env step 116. This validated D14.
+- **Phase 4 / pre-existing quirk (not fixed):** `verify_task.py` prints `final_dist=1.500 m` / `impact_force=0.00 N`
+  after a termination because the env has already auto-reset by the time those values are read. The pass/fail logic is
+  unaffected.
+- **Phase 4 / `verify_nav2.py` not re-run:** it needs the full ROS 2 + Nav2 stack and is on your list. What I did verify:
+  the relocated `nav2.launch.py` builds its launch description with the new relative config paths, and the
+  `test_integration_tf_tree` test (which uses the moved `robot_description.launch.py`) passes.

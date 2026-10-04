@@ -31,6 +31,7 @@ from .sensors import (
     SensorSuiteCfg,
     create_2d_lidar_cfg,
     create_embodiment_camera_cfg,
+    create_goal_camera_cfg,
     create_rgbd_camera_cfg,
     pinhole_intrinsics,
 )
@@ -59,6 +60,7 @@ __all__ = [
     "create_2d_lidar_cfg",
     "create_rgbd_camera_cfg",
     "create_embodiment_camera_cfg",
+    "create_goal_camera_cfg",
     "pinhole_intrinsics",
     "generate_minimal_urdf",
 ]

@@ -36,6 +36,9 @@ class RobotEmbodimentCfg:
     # LiDAR sensors attach here. Distinct from the TF frame names above, which the URDF
     # generator synthesizes independently of the USD hierarchy.
     body_link: str = "chassis_link"
+    # True when the body link also carries a ground-contacting part (e.g. a caster sphere), so its contact forces
+    # include the floor's vertical support force. Collision detection then uses lateral (horizontal) forces only.
+    ground_contact_on_body: bool = False
     lidar_frame: str = "lidar_link"
     camera_frame: str = "camera_link"
     sensor_height: float = 0.35

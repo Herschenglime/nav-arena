@@ -168,6 +168,8 @@ class DingoEmbodimentCfg(RobotEmbodimentCfg):
     chassis_frame: str = "chassis_link"
     # The Dingo USD has a single rigid body: chassis colliders, caster and sensors all live on base_link.
     body_link: str = "base_link"
+    # The caster sphere rests on the floor and is part of base_link, so only lateral forces indicate a collision.
+    ground_contact_on_body: bool = True
     lidar_frame: str = "lidar_link"
     camera_frame: str = "camera_link"
     sensor_height: float = 0.30

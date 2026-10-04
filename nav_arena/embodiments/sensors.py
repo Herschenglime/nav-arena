@@ -183,6 +183,27 @@ def create_embodiment_camera_cfg(embodiment: RobotEmbodimentCfg, **kwargs) -> Ca
     return create_rgbd_camera_cfg(**kwargs)
 
 
+def create_goal_camera_cfg(embodiment: RobotEmbodimentCfg | None = None, **kwargs) -> CameraCfg:
+    """Create an RGB-only camera used to render goal images for image-conditioned policies.
+
+    The camera is a free-standing prim at ``/World/GoalCamera`` (not attached to the robot) with the same optics as
+    the robot camera, so goal images are captured with the same field of view and resolution as live observations.
+    It must be placed with ``Camera.set_world_poses_from_view`` before use; single-environment scenes only.
+
+    Args:
+        embodiment: Unused for optics; accepted so callers can pass the active embodiment symmetrically.
+        **kwargs: Overrides forwarded to :func:`create_rgbd_camera_cfg`.
+
+    Returns:
+        Configured CameraCfg providing ``rgb``.
+    """
+    kwargs.setdefault("prim_path", "/World/GoalCamera")
+    kwargs.setdefault("mount_pos", (0.0, 0.0, 0.0))
+    cfg = create_rgbd_camera_cfg(**kwargs)
+    cfg.data_types = ["rgb"]
+    return cfg
+
+
 @dataclass
 class SensorSuiteCfg:
     """Configurable sensor loadout for an embodiment."""

@@ -120,9 +120,14 @@ source setup.env
 # Headless task verification
 python -u nav_arena/nav_arena/scripts/verify_task.py
 
+# Clearpath Dingo with the RGB-D camera and goal-image rendering
+python -u nav_arena/nav_arena/scripts/verify_task.py --robot dingo --camera
+
 # Interactive GUI inspection
 python -u nav_arena/nav_arena/scripts/verify_task.py --viz kit
 ```
+
+`create_point_nav_env_cfg(robot_name=...)` configures the task for any registered embodiment: its articulation, action term, LiDAR/contact/camera sensors (on the embodiment's USD `body_link`), and any USD stage patch. `enable_camera=True` mounts the RGB-D camera (rendered at 5 Hz by default); `enable_goal_camera=True` adds a free-standing camera for `PointNavTask.render_goal_image(...)`, used by image-goal policies. Episodes end with `goal_reached`, `collision`, `tipped`, or `time_out` (`PointNavTask.get_terminal_cause()`).
 
 ### TF Tree Verification
 Spawns the robot, launches `robot_state_publisher` using programmatic URDF, and asserts transform continuity (`map -> odom -> base_link -> chassis_link -> lidar_link`):
