@@ -4,184 +4,257 @@ A lightweight, modular multi-embodiment navigation simulation and evaluation fra
 
 ---
 
-## 1. Overview
+## 1. Overview & Architecture
 
 ### Project Goal
-The primary goal of this project is scaffolding **Isaac Lab Arena** to work natively for autonomous navigation tasks. It acts as a robust, fully-featured bridge connecting high-fidelity physics and photorealistic simulation directly to standard ROS 2 navigation stacks (such as Nav2) without friction.
+The primary goal of `nav_arena` is scaffolding **Isaac Lab Arena** to work natively for autonomous navigation tasks. It acts as a robust, production-grade bridge connecting high-fidelity PhysX physics and photorealistic USD simulation directly to standard ROS 2 navigation stacks (such as Nav2) without friction or performance degradation.
 
-`nav_arena` is designed to benchmark multi-embodiment navigation policies and Nav2 stacks in photorealistic, physics-rich environments. The framework decouples robot kinematics, sensor rigging, and scene definitions through modular Python configurations, interfacing seamlessly with external autonomy stacks over standard ROS 2 topics.
-
-### Key Capabilities
-- **Modular Embodiment Factory**: Declarative robot configurations with kinematic abstractions (`DifferentialDriveAction` via Isaac Lab's `ActionManager`).
-- **Python-Rigged Sensors**: Programmatically attaches sensors (e.g. 2D planar LiDAR via `RayCasterCfg` / `MultiMeshRayCasterCfg`) to mobile base links without modifying upstream USD assets.
-- **USD Delta Layer Pipeline**: Non-destructive scene conditioning using USD composition (`subLayerPaths`). Deactivates obstacles (e.g., closed doors) ahead of stage load, ensuring sensor and collision parity from step 0.
-- **2D Occupancy Grid Generation**: Automatic programmatic generation and disk caching of 2D binary and trinary occupancy grids directly from USD collision meshes at configurable heights and resolutions.
-- **Native ROS 2 & Nav2 Integration**: Built-in OmniGraph bridges for simulation clock synchronization (`/clock`), odometry (`/odom`), transform frames (`/tf`), laser scans (`/scan`), and command velocity reception (`/cmd_vel`), paired with in-memory URDF synthesis and parameterized Nav2 bringup.
-- **Multi-Modal Visual Execution**: Supports headless evaluation, remote WebRTC livestreaming, and interactive local Omniverse Kit GUI (`--viz kit`).
+### Separation of Concerns
+The repository enforces a strict decoupling across modular subsystems:
+- **Core Simulation ([`nav_arena.core`](file:///home/robopi/simulation/nav_arena/nav_arena/core/app.py))**: Centralized SimulationApp lifecycle management ([`launch_simulation_app`](file:///home/robopi/simulation/nav_arena/nav_arena/core/app.py)), boot-time OmniGraph/ROS 2 extension flag injection, and livestreaming configuration.
+- **Embodiments ([`nav_arena.embodiments`](file:///home/robopi/simulation/nav_arena/nav_arena/embodiments/))**: Robot physical properties, kinematic configurations (`DifferentialDriveAction`), pure kinematics math ([`diff_drive_ik`](file:///home/robopi/simulation/nav_arena/nav_arena/embodiments/kinematics.py)), programmatic sensor rigging (planar 360° LiDAR), and programmatic in-memory URDF synthesis ([`generate_robot_urdf`](file:///home/robopi/simulation/nav_arena/nav_arena/embodiments/urdf.py)).
+- **ROS 2 Bridges ([`nav_arena.ros2`](file:///home/robopi/simulation/nav_arena/nav_arena/ros2/))**: Zero-latency OmniGraph nodes for simulation clock (`/clock`), odometry (`/odom`), and TF (`map -> odom -> base_link`), coupled with asynchronous Python nodes ([`LaserScanPublisherNode`](file:///home/robopi/simulation/nav_arena/nav_arena/ros2/sensors.py), [`TaskStatePublisherNode`](file:///home/robopi/simulation/nav_arena/nav_arena/ros2/state_publisher.py)), action adapters ([`TwistActionAdapter`](file:///home/robopi/simulation/nav_arena/nav_arena/ros2/adapters/action_adapter.py)), and background executors ([`BackgroundRos2Executor`](file:///home/robopi/simulation/nav_arena/nav_arena/ros2/executor.py)).
+- **Scenes ([`nav_arena.scenes`](file:///home/robopi/simulation/nav_arena/nav_arena/scenes/interior_agent.py))**: Non-destructive USD scene conditioning using composition delta layers (`subLayerPaths`), automatic doorway clearing, and static triangle BVH generation for InteriorAgent assets.
+- **Tasks ([`nav_arena.tasks`](file:///home/robopi/simulation/nav_arena/nav_arena/tasks/point_nav.py))**: RL and benchmark task definitions ([`PointNavTask`](file:///home/robopi/simulation/nav_arena/nav_arena/tasks/point_nav.py) extending Isaac Lab's `ManagerBasedRLEnv`), goal sampling, timeout handling, and chassis-isolated contact metrics.
+- **Methods ([`nav_arena.methods`](file:///home/robopi/simulation/nav_arena/nav_arena/methods/nav2/))**: Upstream navigation stack baselines and integration launch infrastructure, including Nav2 lifecycle orchestrators and tuned parameter configurations.
+- **Tools ([`nav_arena.tools`](file:///home/robopi/simulation/nav_arena/nav_arena/tools/map_generator.py))**: Standalone offline utilities, including programmatic 2D occupancy grid generation from USD collision geometry.
+- **Utilities ([`nav_arena.utils`](file:///home/robopi/simulation/nav_arena/nav_arena/utils/))**: Shared cross-cutting infrastructure: unified structured logging ([`ArenaLogger`](file:///home/robopi/simulation/nav_arena/nav_arena/utils/logger.py)), robust subprocess lifecycle management ([`managed_process`](file:///home/robopi/simulation/nav_arena/nav_arena/utils/process.py)), and simulation mock helpers ([`create_mock_env`](file:///home/robopi/simulation/nav_arena/nav_arena/utils/sim.py)).
 
 ---
 
-## 2. Repository Structure
+## 2. Repository Layout
 
 ```text
 nav_arena/
 ├── pyproject.toml                     # Package specification (editable pip install)
-├── README.md                          # Project documentation and usage guide
+├── README.md                          # Project documentation and architecture guide
 ├── cache/                             # Generated runtime caches (git-ignored)
 │   ├── maps/                          # Cached 2D occupancy grids (PNG + YAML)
 │   └── scenes/                        # Conditioned USD delta layers (e.g. open_doors)
 ├── nav_arena/
+│   ├── config/                        # RViz visualization layouts and displays
+│   ├── core/                          # SimulationApp lifecycle & boot-time extension injection
+│   │   ├── __init__.py                # Exports launch_simulation_app
+│   │   └── app.py                     # launch_simulation_app context manager
 │   ├── embodiments/                   # Robot kinematics, sensor factories, in-memory URDF
-│   ├── mapping/                       # 2D occupancy map generation and bounds analysis
+│   │   ├── actions.py                 # DifferentialDriveActionCfg & ActionAdapter
+│   │   ├── kinematics.py              # Pure math differential drive kinematics (FK & IK)
+│   │   ├── nova_carter.py             # Nova Carter differential base configuration
+│   │   ├── sensors.py                 # Planar 2D LiDAR raycaster configuration
+│   │   └── urdf.py                    # Programmatic URDF string synthesis
 │   ├── methods/                       # Autonomy baselines and external stacks
-│   │   └── nav2/                      # Nav2 bringup launch scripts, URDF publisher, parameters
-│   ├── scenes/                        # USD loaders and delta layer conditioning (InteriorAgent)
-│   ├── tasks/                         # PointNavTask, MDP metrics, goals, contacts
+│   │   └── nav2/                      # Nav2 bringup launch scripts, parameters, URDF bridge
 │   ├── ros2/                          # Core ROS 2 Integration Architecture
-│   │   ├── adapters/                  # Action adapters (e.g., TwistActionAdapter)
+│   │   ├── adapters/                  # Action adapters (TwistActionAdapter for /cmd_vel)
+│   │   ├── executor.py                # BackgroundRos2Executor (dedicated worker thread)
 │   │   ├── graph_builder.py           # OmniGraph builder for clock, TF, and odometry
-│   │   └── state_publisher.py         # TaskStatePublisherNode (TF, /goal_pose, /goal_reached)
-│   └── scripts/                       
-│       ├── run_ros2_nav.py            # Main execution orchestrator for the ROS 2 bridge
+│   │   ├── sensors.py                 # LaserScanPublisherNode (360° RayCaster to /scan)
+│   │   └── state_publisher.py         # TaskStatePublisherNode (static TF, /goal_pose, /goal_reached)
+│   ├── scenes/                        # USD loaders and delta layer conditioning (InteriorAgent)
+│   │   └── interior_agent.py          # USD scene loader, delta layer conditioning, BVH preprocessor
+│   ├── tasks/                         # PointNavTask (ManagerBasedRLEnv), MDP terms, metrics
+│   │   └── point_nav.py               # PointNavTask environment & MDP configuration
+│   ├── tools/                         # Offline utilities (CLI 2D map generator)
+│   │   └── map_generator.py           # Programmatic 2D occupancy grid generation tool
+│   ├── utils/                         # Cross-cutting primitives and helpers
+│   │   ├── logger.py                  # ArenaLogger framework, ANSI colors, Carbonite bridge
+│   │   ├── process.py                 # managed_process subprocess context manager
+│   │   └── sim.py                     # Testing mocks and scene path resolution
+│   └── scripts/                       # Executable verification and benchmark runners
+│       ├── run_ros2_nav.py            # Main execution orchestrator for ROS 2 bridge
 │       ├── verify_embodiment.py       # Validates robot kinematics and 2D LiDAR ranges
-│       ├── verify_scene.py            # Validates scene mesh loading and sensor raycasting
+│       ├── verify_scene.py            # Validates scene loading and sensor raycasting
 │       ├── verify_task.py             # Validates PointNavTask MDP metrics and resets
 │       ├── verify_occupancy_map.py    # Generates and validates 2D occupancy maps
 │       ├── verify_tf_tree.py          # Validates robot_state_publisher and complete TF tree
 │       └── verify_nav2.py             # End-to-end Nav2 autonomous navigation benchmark
 └── tests/
-    └── ros2/                          # Automated PyTest integration suite
-        ├── test_state_publisher.py    # Validates static TF and latched QoS
-        └── test_closed_loop.py        # End-to-end simulated driving and ROS 2 bridging test
+    ├── unit/                          # Tier 1: Fast CPU-only unit tests (~2s via pytest)
+    ├── ros2/                          # Tier 2: Subprocess & ROS 2 integration tests
+    └── integration/                   # Tier 3: Full Isaac Sim simulation integration tests
 ```
 
 ---
 
-## 3. Installation
+## 3. Installation & Setup
 
 Ensure your Isaac Lab virtual environment (`env_isaaclab`) and ROS 2 Jazzy workspace are configured:
 
 ```bash
+cd /home/robopi/simulation
 source setup.env
 pip install -e nav_arena
 ```
 
+> **Execution Rule for Users**: Always execute commands directly from `/home/robopi/simulation` using `source setup.env && python -u nav_arena/nav_arena/scripts/<script.py> [args...]`.
+
 ---
 
-## 4. Usage & Verification
+## 4. Core Frameworks & Abstractions
 
-All user commands are executed from the base workspace directory (`~/simulation`).
+### SimulationApp Lifecycle Management (`nav_arena.core`)
+Omniverse Kit requires ActionGraph schemas and ROS 2 bridge extensions to be declared in `sys.argv` *before* `AppLauncher` is instantiated. The [`launch_simulation_app`](file:///home/robopi/simulation/nav_arena/nav_arena/core/app.py) context manager encapsulates this requirement:
+
+```python
+from nav_arena.core import launch_simulation_app
+
+# Automatically injects --enable omni.graph, isaacsim.ros2.bridge, etc.
+with launch_simulation_app(args_cli, enable_ros2=True, livestream=True) as simulation_app:
+    # Build stage, construct ActionGraphs, step simulation
+    ...
+```
+
+### Structured Logging Framework (`ArenaLogger`)
+The [`ArenaLogger`](file:///home/robopi/simulation/nav_arena/nav_arena/utils/logger.py) framework standardizes logging across all scripts and tests:
+- Custom `SUCCESS` severity level ($25$, between `INFO` and `WARNING`).
+- Clean visual formatting: ANSI colors, elapsed execution timestamps, and suppression of noisy third-party loggers (e.g. `rclpy`, `urdf_parser_py`).
+- Automatic bridging to Omniverse Carbonite log handlers (`carb.log_info`, `carb.log_warn`, `carb.log_error`) when running inside Isaac Sim.
+- Verification assertion helpers: `logger.section(title)`, `logger.check(name, passed, detail)`, and `logger.success(msg)`.
+
+```python
+import argparse
+from nav_arena.utils import add_logger_args, configure_logging, get_logger
+
+parser = argparse.ArgumentParser()
+add_logger_args(parser)  # Adds --log-level {DEBUG,INFO,SUCCESS,WARNING,ERROR,CRITICAL}
+args = parser.parse_args()
+
+configure_logging(args.log_level)
+logger = get_logger("my_component")
+
+logger.section("INITIALIZING BENCHMARK")
+logger.info("Setting up simulation environment...")
+logger.check("Sensor initialized", lidar is not None, "360 rays active")
+logger.success("Benchmark completed successfully!")
+```
+
+### Offline 2D Occupancy Map Generation (`nav_arena.tools.map_generator`)
+Generates ROS 2-standard 2D occupancy grid maps (`map.yaml` and `map.png`) directly from USD collision meshes across an obstacle height slice (default: $0.01\,\text{m}$ to $0.60\,\text{m}$) without requiring manual SLAM:
+
+```bash
+source setup.env
+# Run map generator on default scene (kujiale_0003) with 0.05m resolution
+python -u -m nav_arena.tools.map_generator --scene kujiale_0003 --cell-size 0.05
+
+# Force regeneration with custom height bounds
+python -u -m nav_arena.tools.map_generator --scene kujiale_0003 --z-min 0.02 --z-max 0.80 --force
+```
+
+Maps are automatically cached to `cache/maps/<scene_id>/cs<cell_size>_z<z_min>-<z_max>/` and dynamically located by Nav2 bringup.
+
+---
+
+## 5. Testing Framework Tiers
+
+The test suite is organized into three distinct verification tiers:
+
+| Tier | Directory | Description | Typical Runtime | Target Environment |
+|---|---|---|---|---|
+| **L1: Unit Tests** | [`tests/unit/`](file:///home/robopi/simulation/nav_arena/tests/unit/) | Fast, CPU-only algorithmic & component tests (kinematics, LaserScan math, logger, process management, scene resolution, URDF synthesis). | ~2.2 seconds (52 tests) | Pure Python / CPU |
+| **L2: ROS 2 Tests** | [`tests/ros2/`](file:///home/robopi/simulation/nav_arena/tests/ros2/) | Subprocess & ROS 2 middleware tests (Action adapters, OmniGraph builders, state publisher QoS, closed-loop driving). Marked with `@pytest.mark.ros2`. | ~30 seconds (4 tests) | ROS 2 Jazzy & Subprocess |
+| **L3: Simulation Tests** | [`tests/integration/`](file:///home/robopi/simulation/nav_arena/tests/integration/) | In-process Isaac Sim tests (occupancy grid generation, full `PointNavTask` stepping and resets, TF tree continuity). Marked with `@pytest.mark.integration`. | ~26 seconds (3 tests) | GPU / Isaac Sim PhysX |
+
+### Running Tests
+
+```bash
+source setup.env
+
+# 1. Run all L1 Unit Tests (fast CPU verification)
+pytest -c nav_arena/pyproject.toml nav_arena/tests/unit -v
+
+# 2. Run L2 ROS 2 Integration Tests
+pytest -c nav_arena/pyproject.toml nav_arena/tests/ros2 -v
+
+# 3. Run L3 Simulation Integration Tests
+pytest -c nav_arena/pyproject.toml nav_arena/tests/integration -v
+
+# 4. Run entire suite excluding heavy GPU simulation
+pytest -c nav_arena/pyproject.toml -m "not integration" -v
+```
+
+---
+
+## 6. Execution & Verification Scripts
+
+All user commands run from `/home/robopi/simulation`.
 
 ### Embodiment Verification
-Runs 60 simulation steps, exercises the `DifferentialDriveAction` controller, reads 2D LiDAR range arrays, and validates displacement:
-
+Validates Nova Carter kinematics, exercises `DifferentialDriveAction`, reads 2D LiDAR range arrays, and validates displacement:
 ```bash
 source setup.env
 python -u nav_arena/nav_arena/scripts/verify_embodiment.py
 ```
 
-### Scene & Navigation Verification (InteriorAgent)
-Loads an InteriorAgent USD scene (defaults to `kujiale_0003`, or pass `--scene <name_or_path>`), settles Nova Carter on the floor geometry, drives forward, and verifies 360° LiDAR raycasting:
-
+### Scene Verification (InteriorAgent)
+Loads an InteriorAgent USD scene, settles the robot on floor geometry, drives forward, and verifies 360° LiDAR raycasting:
 ```bash
 source setup.env
-# Run headless verification on default scene
-python -u nav_arena/nav_arena/scripts/verify_scene.py
+# Headless execution
+python -u nav_arena/nav_arena/scripts/verify_scene.py --scene kujiale_0003
 
-# Run on a different scene (e.g. kujiale_0004)
-python -u nav_arena/nav_arena/scripts/verify_scene.py --scene kujiale_0004
-
-# Run with interactive GUI window
+# Interactive GUI window
 python -u nav_arena/nav_arena/scripts/verify_scene.py --viz kit --loop
 ```
 
-### 2D Occupancy Grid Generation & Verification
-Generates a 2D occupancy grid from USD collision geometry across an obstacle height slice (default: $0.01\,\text{m}$ to $0.60\,\text{m}$), saves standard ROS `map.yaml` and `map.png` artifacts to `cache/maps/<scene_id>/`, and verifies bounds:
-
+### Occupancy Map Verification
+Generates and validates 2D occupancy map bounds and verifies YAML metadata:
 ```bash
 source setup.env
-# Generate or verify occupancy map for default scene (kujiale_0003)
-python -u nav_arena/nav_arena/scripts/verify_occupancy_map.py
-
-# Force regeneration with custom resolution (e.g. 0.025 m/pixel)
-python -u nav_arena/nav_arena/scripts/verify_occupancy_map.py --scene kujiale_0003 --cell-size 0.025 --force
+python -u nav_arena/nav_arena/scripts/verify_occupancy_map.py --scene kujiale_0003
 ```
 
-### TF Tree & Robot Description Verification
-Spawns the embodiment in simulation, launches `robot_state_publisher` using the generated in-memory URDF, and asserts complete transform continuity across `/clock`, `/odom`, and `/tf` (`map -> odom -> base_link -> chassis_link -> lidar_link`):
-
+### TF Tree Verification
+Spawns the robot, launches `robot_state_publisher` using programmatic URDF, and asserts transform continuity (`map -> odom -> base_link -> chassis_link -> lidar_link`):
 ```bash
 source setup.env
 python -u nav_arena/nav_arena/scripts/verify_tf_tree.py
 ```
 
 ### PointNav Task & Metrics Verification
-Instantiates the full `ManagerBasedRLEnv`-derived `PointNavTask`, exercises goal generation and tracking (`UniformPose2dCommandCfg`), drives the robot forward to verify goal reach termination, checks state restoration upon episode reset, and tests wall impact contact detection (`ContactSensorCfg` / `illegal_contact`).
-
-#### Headless Verification
+Instantiates `PointNavTask`, exercises goal tracking (`UniformPose2dCommandCfg`), drives the robot forward to verify goal reach termination, checks state restoration upon episode reset, and tests chassis-isolated collision detection:
 ```bash
 source setup.env
-# Run automated verification suite on default scene
+# Headless task test
 python -u nav_arena/nav_arena/scripts/verify_task.py
 
-# Run on a different scene (e.g. kujiale_0004)
-python -u nav_arena/nav_arena/scripts/verify_task.py --scene kujiale_0004
-```
-
-#### Visual Inspection (Interactive Viewport Window)
-```bash
-source setup.env
+# Interactive GUI inspection
 python -u nav_arena/nav_arena/scripts/verify_task.py --viz kit
 ```
 
-*(Note: On the first launch on GB10 / aarch64, allow ~60–90 seconds for Vulkan shader compilation before the viewport window renders).*
-
 ### Nav2 Autonomous Navigation Benchmark
-Launches Isaac Lab alongside the full Nav2 navigation stack (Map Server, AMCL, Costmaps, NavfnPlanner, DWBLocalPlanner, BT Navigator), feeds simulated LiDAR to `/scan`, synchronizes `/clock` and TF, and autonomously navigates between distant rooms:
-
+Launches Isaac Lab alongside the complete Nav2 navigation stack (Map Server, AMCL, Costmaps, NavfnPlanner, DWBLocalPlanner, BT Navigator), feeds simulated LiDAR to `/scan`, synchronizes `/clock` and TF, and autonomously navigates to goal poses:
 ```bash
 source setup.env
-# Run headless benchmark on default long-distance route (West bedroom -> East bedroom)
+# Run headless benchmark (default open living room route: (-2.5, 0.0) -> (-1.0, 0.0))
 python -u nav_arena/nav_arena/scripts/verify_nav2.py
 
 # Run with interactive Omniverse Kit GUI and RViz2 visualization
 python -u nav_arena/nav_arena/scripts/verify_nav2.py --viz kit --rviz
 
 # Run with custom start and goal coordinates
-python -u nav_arena/nav_arena/scripts/verify_nav2.py --spawn-x -6.42 --spawn-y 0.64 --goal-x 5.70 --goal-y -1.52
+python -u nav_arena/nav_arena/scripts/verify_nav2.py --spawn-x -2.5 --spawn-y 0.0 --goal-x 1.5 --goal-y 0.0
 ```
 
-### ROS 2 Bridge & Closed-Loop Integration
-The primary orchestrator boots the simulation, establishes the ROS 2 bridge (Clock, TF, Odom), and listens to `/cmd_vel` to drive the robot.
-
-**Interactive Execution with RViz2:**
+### ROS 2 Bridge Runner
+Main execution orchestrator booting the simulation, establishing the OmniGraph ROS 2 bridge, and listening to `/cmd_vel`:
 ```bash
 source setup.env
-# Terminal 1: Launch the simulation bridge
+# Terminal 1: Launch simulation bridge
 python -u nav_arena/nav_arena/scripts/run_ros2_nav.py
 
-# Terminal 2: Launch RViz to visualize relative map and odom TF poses, and the goal
+# Terminal 2: Visualize in RViz2
 rviz2 -d nav_arena/nav_arena/config/nav_arena.rviz
-```
-
-**Automated End-to-End Driving Test:**
-```bash
-source setup.env
-python -u nav_arena/tests/ros2/test_closed_loop.py
 ```
 
 ---
 
-## 5. Implementation Notes & Invariants
+## 7. Implementation Invariants & Technical Notes
 
-- **Quaternion Ordering**: Isaac Lab's `AssetBaseCfg.InitialStateCfg.rot` expects `(x, y, z, w)`. Identity rotation is `(0.0, 0.0, 0.0, 1.0)`. Passing `(1.0, 0.0, 0.0, 0.0)` inverts the asset 180° around the X-axis.
-- **Ground Clearance**: Mobile robots must spawn with ground clearance (e.g. `pos=(0.0, 0.0, 0.25)`) to avoid PhysX collision penetration depenetration impulses on step 0.
-- **OmniGraph Extension Booting**: Scripts using ActionGraphs must inject `--enable omni.graph --enable omni.graph.action --enable isaacsim.ros2.bridge --enable isaacsim.ros2.nodes` into `sys.argv` before `AppLauncher` is instantiated.
-- **USD Delta Layers & Raycaster Static BVH**: Isaac Lab's `MultiMeshRayCaster` bakes its static triangle BVH (`merge_prim_meshes=True`) at environment initialization. Calling `prim.SetActive(False)` *after* the stage loads drops PhysX collision, but **does not rebuild the raycaster BVH**. To open doors or alter geometry for sensors, scenes must be conditioned *before* stage load using non-destructive USD delta layers (`subLayerPaths` via `get_preprocessed_usd` / `get_open_door_usd`).
-- **ROS 2 Concurrency & Nav2 Lifecycle**: Coupling asynchronous DDS waitsets to a synchronous physics loop via single-step `spin_once(timeout_sec=0.0)` starves service futures and drops `/cmd_vel` callbacks under rendering load. ROS 2 callback dispatch must run on a dedicated worker thread (`threading.Thread(target=executor.spin)`), cleanly decoupling middleware processing from physics stepping.
-- **Doorway Costmap Buffers**: In tight residential scenes with $0.65 - 0.80\,\text{m}$ doorways, large footprint padding ($0.05\,\text{m}$) leaves $< 1\,\text{cm}$ clearance margin to inscribed obstacles ($253$). Nav2 costmaps configure tight footprint padding ($0.01\,\text{m}$) and an inflation radius ($0.35\,\text{m}$) with decay $\alpha = 3.0 / 4.0$ to provide a clean zero-cost corridor through narrow passages.
-- **Global Scene & Multi-Mesh Raycasting**: Indoor USD environments (like InteriorAgent) are loaded as a single global stage asset at `/World/Scene`. 2D planar LiDAR uses Isaac Lab's `MultiMeshRayCasterCfg` (`merge_prim_meshes=True`, `track_mesh_transforms=False`) to unify all room and obstacle sub-meshes for real-time GPU raycasting.
-- **MDP Task & Metric Architecture**: `PointNavTask` inherits from Isaac Lab's `ManagerBasedRLEnv`. Goal poses are generated and tracked with `UniformPose2dCommandCfg` with visual arrow markers in the viewport. Collision metrics specifically bind a `ContactSensorCfg` to `{ENV_REGEX_NS}/Robot/chassis_link` so wheel-ground contacts do not trigger false-positive collisions while chassis impacts immediately register `illegal_contact`.
-- **ConfigClass Import Convention**: Always import `configclass` as `from isaaclab.utils.configclass import configclass` to prevent namespace collisions where submodule imports overwrite the function handle.
-- **Standard Coordinate Frames (REP-105)**: While Isaac Sim defaults its root to `world`, standard ROS 2 navigation packages strictly expect the `map -> odom -> base_link` tree. Our bridge dynamically queries the robot spawn and publishes a static `map -> odom` transform to bridge the two ecosystems seamlessly.
-- **Latched Topic QoS**: Task state topics that publish once per episode (e.g., `/goal_pose` and `/goal_reached`) must use `TRANSIENT_LOCAL` durability with depth 1. This prevents late-joining test runners or metric recorders from missing the termination signals due to race conditions.
+- **Quaternion Ordering**: Isaac Lab's `AssetBaseCfg.InitialStateCfg.rot` strictly expects **`(x, y, z, w)`**. Identity rotation is `(0.0, 0.0, 0.0, 1.0)`. Passing `(1.0, 0.0, 0.0, 0.0)` rolls the asset 180° around the X-axis (inverting it).
+- **Spawn Ground Clearance**: Mobile robots must spawn with clearance (e.g. `pos=(0.0, 0.0, 0.25)`) to avoid violent PhysX collision depenetration impulses on step 0.
+- **OmniGraph Extension Booting**: Any script creating OmniGraphs or ROS 2 bridge nodes must declare extensions before `AppLauncher` boots. Use [`launch_simulation_app`](file:///home/robopi/simulation/nav_arena/nav_arena/core/app.py) to manage this automatically.
+- **USD Delta Layers & Raycaster Static BVH**: Isaac Lab's `MultiMeshRayCaster` bakes its static triangle BVH (`merge_prim_meshes=True`) at environment initialization. Calling `prim.SetActive(False)` *after* stage load drops PhysX collision, but **does not rebuild the raycaster BVH**. To open doors or alter geometry for sensors, scenes are pre-conditioned before load using non-destructive USD delta layers (`subLayerPaths` via `get_preprocessed_usd`).
+- **ROS 2 Concurrency & Worker Threads**: Coupling asynchronous DDS waitsets to a synchronous physics loop via single-step `spin_once(timeout_sec=0.0)` starves service futures and drops `/cmd_vel` callbacks under rendering load. ROS 2 callback dispatch runs on a dedicated worker thread via [`BackgroundRos2Executor`](file:///home/robopi/simulation/nav_arena/nav_arena/ros2/executor.py).
+- **Standard Coordinate Frames (REP-105)**: The bridge strictly maintains the REP-105 transform tree `map -> odom -> base_link -> chassis_link -> lidar_link`. Odometry publishes `odom -> base_link`, and AMCL or the static state publisher provides `map -> odom`.
+- **Latched Topic QoS**: Task state topics that publish once per episode (e.g., `/goal_pose` and `/goal_reached`) use `TRANSIENT_LOCAL` durability with depth 1 to prevent late-joining subscribers from missing signals.
+- **Doorway Costmap Buffers**: In residential scenes with $0.65 - 0.80\,\text{m}$ doorways, Nav2 costmaps configure tight footprint padding ($0.01\,\text{m}$) and an inflation radius ($0.35\,\text{m}$) with decay $\alpha = 3.0 / 4.0$ to provide a clean zero-cost corridor through narrow passages.

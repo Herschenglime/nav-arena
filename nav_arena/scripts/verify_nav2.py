@@ -22,11 +22,11 @@ parser = argparse.ArgumentParser(description="Verify Nav2 autonomous navigation 
 parser.add_argument("--scene", type=str, default="kujiale_0003", help="Scene ID or USD path.")
 parser.add_argument("--max-steps", type=int, default=2500, help="Max simulation steps for navigation.")
 parser.add_argument("--rviz", action="store_true", help="Launch RViz with Nav2.")
-parser.add_argument("--spawn-x", type=float, default=-6.42, help="Robot spawn X coordinate (m). Default: -6.42 (West bedroom)")
-parser.add_argument("--spawn-y", type=float, default=0.64, help="Robot spawn Y coordinate (m). Default: 0.64 (West bedroom)")
+parser.add_argument("--spawn-x", type=float, default=-2.5, help="Robot spawn X coordinate (m). Default: -2.5 (Living room)")
+parser.add_argument("--spawn-y", type=float, default=0.0, help="Robot spawn Y coordinate (m). Default: 0.0 (Living room)")
 parser.add_argument("--spawn-yaw", type=float, default=0.0, help="Robot spawn heading (rad). Default: 0.0")
-parser.add_argument("--goal-x", type=float, default=5.70, help="Navigation goal X coordinate (m). Default: 5.70 (East bedroom)")
-parser.add_argument("--goal-y", type=float, default=-1.52, help="Navigation goal Y coordinate (m). Default: -1.52 (East bedroom)")
+parser.add_argument("--goal-x", type=float, default=-1.0, help="Navigation goal X coordinate (m). Default: -1.0 (Living room)")
+parser.add_argument("--goal-y", type=float, default=0.0, help="Navigation goal Y coordinate (m). Default: 0.0 (Living room)")
 parser.add_argument("--goal-yaw", type=float, default=0.0, help="Navigation goal heading (rad). Default: 0.0")
 
 from nav_arena.core import launch_simulation_app
@@ -40,6 +40,7 @@ args_cli, _ = parser.parse_known_args()
 
 configure_logging(args_cli.log_level)
 
+import rclpy
 from rclpy.executors import SingleThreadedExecutor
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Twist
 from lifecycle_msgs.msg import State
@@ -280,6 +281,9 @@ def run_nav2_verification(simulation_app):
                         logger.error(f"Nav2 process died:\n{f.read()[-2000:]}")
                     assert False, "Nav2 process crashed during navigation."
 
+                # Query robot pose before stepping to capture pre-reset state if termination triggers
+                pre_step_x, pre_step_y, _ = env.get_robot_pose_w(0)
+
                 # Apply commanded actions to robot articulation (updated concurrently by background ROS 2 thread)
                 actions = action_adapter.get_action()
                 obs, rewards, dones, timeouts, infos = env.step(actions)
@@ -291,7 +295,13 @@ def run_nav2_verification(simulation_app):
                 simulation_app.update()
 
                 # Track navigation progress
-                curr_x, curr_y, _ = env.get_robot_pose_w(0)
+                # Note: When goal termination triggers, PointNavTask (ManagerBasedRLEnv) resets
+                # the robot to spawn on that step. Use pre-step pose to capture true arrival metrics.
+                if env.is_goal_reached(0):
+                    curr_x, curr_y = pre_step_x, pre_step_y
+                else:
+                    curr_x, curr_y, _ = env.get_robot_pose_w(0)
+
                 traveled = math.hypot(curr_x - start_x, curr_y - start_y)
                 max_traveled = max(max_traveled, traveled)
 
@@ -342,14 +352,20 @@ def run_nav2_verification(simulation_app):
 
     finally:
         logger.info("Cleaning up ROS 2 nodes...")
-        if executor is not None:
+        if "executor" in locals() and executor is not None:
             executor.shutdown()
-        test_node.destroy_node()
-        state_publisher.destroy_node()
-        scan_publisher.destroy_node()
-        action_adapter.destroy_node()
-        rclpy.shutdown()
-        log_file.close()
+        if "test_node" in locals() and test_node is not None:
+            test_node.destroy_node()
+        if "state_publisher" in locals() and state_publisher is not None:
+            state_publisher.destroy_node()
+        if "scan_publisher" in locals() and scan_publisher is not None:
+            scan_publisher.destroy_node()
+        if "action_adapter" in locals() and action_adapter is not None:
+            action_adapter.destroy_node()
+        if "rclpy" in sys.modules and rclpy.ok():
+            rclpy.shutdown()
+        if "log_file" in locals() and log_file is not None and not log_file.closed:
+            log_file.close()
 
 
 
