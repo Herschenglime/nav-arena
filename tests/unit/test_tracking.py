@@ -845,3 +845,42 @@ class TestEdgeCasesAndRobustness:
         lines = [line for line in table.splitlines() if "navdp" in line]
         assert len(lines) == 1
         assert "22.10 ± 0.00" in lines[0]
+
+
+class TestTolerantReaders:
+    """Corrupt or partial run files degrade gracefully instead of raising."""
+
+    def _batch(self, tmp_path):
+        batch = tmp_path / "b1"
+        batch.mkdir()
+        (batch / "batch.yaml").write_text("batch_id: b1\nstatus: running\n")
+        return batch
+
+    def test_corrupt_manifest_and_csv_are_skipped(self, tmp_path):
+        from nav_arena.benchmarks.tracking import list_runs, show_run
+
+        batch = self._batch(tmp_path)
+        (batch / "manifest.json").write_text("{not json")
+        (batch / "results.csv").write_text("run_id,success\nr1,true\n")
+        listed = list_runs(tmp_path)
+        assert listed[0]["batch_id"] == "b1" and listed[0]["total"] == 1
+        assert show_run("b1", tmp_path)["type"] == "batch"
+        assert [r["run_id"] for r in list_runs(tmp_path, batch_id="b1")] == ["r1"]
+
+    def test_corrupt_batch_yaml_falls_back_to_directory_name(self, tmp_path):
+        from nav_arena.benchmarks.tracking import list_runs
+
+        batch = tmp_path / "b2"
+        batch.mkdir()
+        (batch / "batch.yaml").write_text("a: [unclosed")
+        (batch / "manifest.json").write_text('{"batch_id": "b2", "runs": []}')
+        assert list_runs(tmp_path)[0]["batch_id"] == "b2"
+
+    def test_unexpected_errors_are_not_swallowed(self, tmp_path, monkeypatch):
+        from nav_arena.benchmarks import tracking
+
+        self._batch(tmp_path)
+        monkeypatch.setattr(tracking, "_load_manifest", lambda path: (_ for _ in ()).throw(RuntimeError("boom")))
+        (tmp_path / "b1" / "manifest.json").write_text("{}")
+        with pytest.raises(RuntimeError):
+            tracking.list_runs(tmp_path)

@@ -8,6 +8,9 @@
 Provides inspection, listing, metric aggregation, comparison, and rerun
 resolution for recorded navigation benchmark episodes.
 
+Run directories can be partial or hand-edited, so every reader degrades gracefully: unreadable files are skipped
+(logged at debug level) rather than raised.
+
 This module guarantees fast startup and strictly forbids importing heavy
 simulation, deep learning, or ROS frameworks (isaaclab, isaacsim, omni, pxr, rclpy, torch).
 """
@@ -15,28 +18,114 @@ simulation, deep learning, or ROS frameworks (isaaclab, isaacsim, omni, pxr, rcl
 from __future__ import annotations
 
 import csv
+from dataclasses import dataclass
 from datetime import datetime
-import json
 import math
 from pathlib import Path
 from typing import Any
 
-import yaml
-
-from nav_arena.benchmarks.manifest import (
-    BatchManifest,
-    RunRecord,
-    RunStatus,
-)
-from nav_arena.benchmarks.spec import (
-    EpisodeLimits,
-    RunSpec,
-    VizCfg,
-    validate_spec,
-)
+from nav_arena.benchmarks.io import load_json, load_yaml
+from nav_arena.benchmarks.manifest import BatchManifest, RunRecord, RunStatus
+from nav_arena.benchmarks.spec import EpisodeLimits, RunSpec, VizCfg, validate_spec
 from nav_arena.utils.logger import get_logger
 
 logger = get_logger("benchmarks.tracking")
+
+_RUN_MARKERS = ("run_spec.json", "summary.json", "worker.log")
+"""Files that identify a directory as a single run."""
+
+
+##
+# Small readers
+##
+
+
+def _is_true(value: Any) -> bool:
+    return str(value).strip().lower() in ("true", "1")
+
+
+def _to_float(value: Any) -> float | None:
+    """Convert to float; ``None`` for missing, empty, or unparseable values."""
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _read_csv_rows(path: Path) -> list[dict[str, Any]]:
+    """Rows of a results.csv; empty if the file is missing or unreadable."""
+    try:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            return list(csv.DictReader(handle))
+    except (OSError, csv.Error, UnicodeDecodeError) as exc:
+        logger.debug("Failed reading %s: %s", path, exc)
+        return []
+
+
+def _load_manifest(path: Path) -> BatchManifest | None:
+    """Load a manifest; ``None`` if it is missing or corrupt."""
+    try:
+        return BatchManifest.load(path)
+    except (OSError, ValueError) as exc:
+        logger.debug("Failed reading manifest %s: %s", path, exc)
+        return None
+
+
+def _load_dict(loader: Any, path: Path) -> dict[str, Any]:
+    """Load JSON/YAML and keep it only if it is a mapping."""
+    data = loader(path)
+    return data if isinstance(data, dict) else {}
+
+
+def _is_run_dir(directory: Path, markers: tuple[str, ...] = _RUN_MARKERS) -> bool:
+    return directory.is_dir() and any((directory / name).is_file() for name in markers)
+
+
+def _status_from_cause(terminal_cause: str | None) -> str:
+    """Status for a finished run: ``done``, unless it ended as a timeout or failure."""
+    if not terminal_cause or terminal_cause not in ("timeout", "failed"):
+        return "done"
+    return terminal_cause
+
+
+def _succeeded(record: RunRecord) -> bool:
+    return record.terminal_cause == "goal_reached" or record.exit_code == 0
+
+
+def _infer_batch_status(records: list[RunRecord]) -> str:
+    """Batch status from its runs when batch.yaml does not record one."""
+    done = sum(1 for r in records if r.status == RunStatus.DONE.value)
+    if records and done == len(records):
+        return "done"
+    if any(r.status == RunStatus.RUNNING.value for r in records):
+        return "running"
+    if all(r.status == RunStatus.QUEUED.value for r in records):
+        return "queued"
+    return "partial"
+
+
+##
+# Batch resolution
+##
+
+
+def _is_batch_dir(directory: Path) -> bool:
+    if not directory.is_dir():
+        return False
+    if (directory / "manifest.json").is_file() or (directory / "batch.yaml").is_file():
+        return True
+    # A directory with results.csv but without run_spec.json is a batch directory
+    return (directory / "results.csv").is_file() and not (directory / "run_spec.json").is_file()
+
+
+def _declares_batch_id(directory: Path, batch_id: str) -> bool:
+    """True if the directory's batch.yaml or manifest.json names ``batch_id`` (by id or sweep name)."""
+    declared = _load_dict(load_yaml, directory / "batch.yaml")
+    if batch_id in (declared.get("batch_id"), declared.get("name")):
+        return True
+    return _load_dict(load_json, directory / "manifest.json").get("batch_id") == batch_id
 
 
 def _resolve_batch_dir(batch_id: str, runs_dir: Path) -> Path:
@@ -52,54 +141,160 @@ def _resolve_batch_dir(batch_id: str, runs_dir: Path) -> Path:
     Raises:
         FileNotFoundError: If the batch directory cannot be found.
     """
-    def _is_batch_dir(d: Path) -> bool:
-        if not d.is_dir():
-            return False
-        if (d / "manifest.json").is_file() or (d / "batch.yaml").is_file():
-            return True
-        # A directory with results.csv but without run_spec.json is a batch directory
-        if (d / "results.csv").is_file() and not (d / "run_spec.json").is_file():
-            return True
-        return False
+    for candidate in (Path(batch_id), runs_dir / batch_id):
+        if _is_batch_dir(candidate):
+            return candidate.resolve()
 
-    candidate = Path(batch_id)
-    if _is_batch_dir(candidate):
-        return candidate.resolve()
-
-    candidate = runs_dir / batch_id
-    if _is_batch_dir(candidate):
-        return candidate.resolve()
-
-    # Search in runs_dir
     if runs_dir.is_dir():
-        for d in runs_dir.iterdir():
-            if not d.is_dir():
+        for directory in runs_dir.iterdir():
+            if not directory.is_dir():
                 continue
-            if (d.name == batch_id or d.name.endswith(f"_{batch_id}")) and _is_batch_dir(d):
-                return d.resolve()
-
-            # Check batch.yaml metadata
-            b_yaml_path = d / "batch.yaml"
-            if b_yaml_path.is_file():
-                try:
-                    data = yaml.safe_load(b_yaml_path.read_text(encoding="utf-8")) or {}
-                    if isinstance(data, dict):
-                        if data.get("batch_id") == batch_id or data.get("name") == batch_id:
-                            return d.resolve()
-                except Exception:
-                    pass
-
-            # Check manifest.json metadata
-            m_path = d / "manifest.json"
-            if m_path.is_file():
-                try:
-                    m_data = json.loads(m_path.read_text(encoding="utf-8")) or {}
-                    if isinstance(m_data, dict) and m_data.get("batch_id") == batch_id:
-                        return d.resolve()
-                except Exception:
-                    pass
+            named = directory.name == batch_id or directory.name.endswith(f"_{batch_id}")
+            if (named and _is_batch_dir(directory)) or _declares_batch_id(directory, batch_id):
+                return directory.resolve()
 
     raise FileNotFoundError(f"Batch '{batch_id}' not found under {runs_dir}")
+
+
+##
+# list_runs
+##
+
+
+def _summarize_batch(directory: Path) -> dict[str, Any]:
+    """Summary row for a directory holding a manifest and/or batch.yaml."""
+    batch_id, status = directory.name, "unknown"
+    total = completed = success_count = 0
+
+    declared = _load_dict(load_yaml, directory / "batch.yaml")
+    batch_id = declared.get("batch_id", batch_id)
+    status = declared.get("status", status)
+
+    manifest = _load_manifest(directory / "manifest.json") if (directory / "manifest.json").is_file() else None
+    if manifest is not None:
+        total = len(manifest.runs)
+        completed = sum(1 for r in manifest.runs if r.status == RunStatus.DONE.value)
+        success_count = sum(1 for r in manifest.runs if _succeeded(r))
+        if status == "unknown":
+            status = _infer_batch_status(manifest.runs)
+
+    rows = _read_csv_rows(directory / "results.csv")
+    if rows:  # results.csv gives the most accurate success counts
+        total = total or len(rows)
+        completed = completed or len(rows)
+        success_count = sum(1 for row in rows if _is_true(row.get("success", "")))
+
+    return _batch_row(batch_id, total, completed, success_count, status)
+
+
+def _summarize_standalone_run(directory: Path) -> dict[str, Any]:
+    """Summary row for a single-run directory (no manifest or batch.yaml)."""
+    status = "unknown"
+    completed = success_count = 0
+
+    summary = _load_dict(load_json, directory / "summary.json")
+    if summary:
+        terminal_cause = summary.get("terminal_cause")
+        success = bool(summary["success"]) if "success" in summary else terminal_cause == "goal_reached"
+        completed, success_count = 1, int(success)
+        status = _status_from_cause(terminal_cause)
+    else:
+        rows = _read_csv_rows(directory / "results.csv")
+        if rows:
+            completed, success_count = 1, int(_is_true(rows[0].get("success", "")))
+            status = _status_from_cause(rows[0].get("terminal_cause"))
+        elif (directory / "worker.log").is_file():
+            status = "finished"
+        elif (directory / "run_spec.json").is_file():
+            status = "queued"
+
+    return _batch_row(directory.name, 1, completed, success_count, status)
+
+
+def _batch_row(batch_id: str, total: int, completed: int, success_count: int, status: str) -> dict[str, Any]:
+    success_rate = round(success_count / completed * 100.0, 1) if completed > 0 else 0.0
+    return {
+        "batch_id": batch_id,
+        "total": total,
+        "total_runs": total,
+        "completed": completed,
+        "success_rate": success_rate,
+        "status": status,
+    }
+
+
+_LISTED_FILES = ("manifest.json", "batch.yaml", "run_spec.json", "summary.json", "results.csv")
+
+
+def _list_batches(runs_root: Path) -> list[dict[str, Any]]:
+    if not runs_root.is_dir():
+        return []
+    candidates = [d for d in runs_root.iterdir() if _is_run_dir(d, _LISTED_FILES)]
+    candidates.sort(key=lambda d: d.stat().st_mtime, reverse=True)  # newest first
+    return [
+        _summarize_batch(d)
+        if (d / "manifest.json").is_file() or (d / "batch.yaml").is_file()
+        else _summarize_standalone_run(d)
+        for d in candidates
+    ]
+
+
+def _run_row(**fields: Any) -> dict[str, Any]:
+    """Row for ``list_runs(batch_id=...)``; ``time_to_goal`` is kept alongside ``time_to_goal_s`` for compatibility."""
+    ttg = fields.pop("ttg")
+    return {**fields, "time_to_goal": ttg, "time_to_goal_s": ttg}
+
+
+def _manifest_run_row(record: RunRecord, csv_row: dict[str, Any], batch_dir: Path) -> dict[str, Any]:
+    if "success" in csv_row:
+        success = _is_true(csv_row["success"])
+    else:
+        success = _succeeded(record)
+
+    ttg: float | None = None
+    summary_path = batch_dir / (record.run_dir or record.id) / "summary.json"
+    if csv_row.get("time_to_goal_s"):
+        ttg = _to_float(csv_row["time_to_goal_s"])
+    elif summary_path.is_file():
+        summary = _load_dict(load_json, summary_path)
+        ttg = _to_float(summary.get("time_to_goal_s"))
+        if "success" in summary:
+            success = bool(summary["success"])
+
+    return _run_row(
+        run_id=record.id,
+        method=record.method,
+        robot=record.robot,
+        route=record.route if record.route is not None else "custom",
+        seed=record.seed,
+        status=record.status,
+        terminal_cause=record.terminal_cause or csv_row.get("terminal_cause"),
+        success=success,
+        ttg=ttg,
+    )
+
+
+def _csv_run_row(run_id: str, row: dict[str, Any]) -> dict[str, Any]:
+    return _run_row(
+        run_id=run_id,
+        method=row.get("method", "unknown"),
+        robot=row.get("robot", "unknown"),
+        route=row.get("route", "unknown"),
+        seed=int(row["seed"]) if row.get("seed") else 0,
+        status=RunStatus.DONE.value,
+        terminal_cause=row.get("terminal_cause"),
+        success=_is_true(row.get("success", "")),
+        ttg=_to_float(row.get("time_to_goal_s")),
+    )
+
+
+def _list_batch_runs(batch_dir: Path) -> list[dict[str, Any]]:
+    csv_by_id = {row["run_id"]: row for row in _read_csv_rows(batch_dir / "results.csv") if row.get("run_id")}
+    manifest_path = batch_dir / "manifest.json"
+    manifest = _load_manifest(manifest_path) if manifest_path.is_file() else None
+    if manifest is not None:
+        return [_manifest_run_row(r, csv_by_id.get(r.id, {}), batch_dir) for r in manifest.runs]
+    return [_csv_run_row(run_id, row) for run_id, row in csv_by_id.items()]
 
 
 def list_runs(runs_dir: Path, batch_id: str | None = None) -> list[dict[str, Any]]:
@@ -120,242 +315,252 @@ def list_runs(runs_dir: Path, batch_id: str | None = None) -> list[dict[str, Any
             `terminal_cause`, `success`, `time_to_goal`.
     """
     runs_root = Path(runs_dir)
-
     if batch_id is None:
-        # List batches
-        if not runs_root.is_dir():
-            return []
+        return _list_batches(runs_root)
+    return _list_batch_runs(_resolve_batch_dir(batch_id, runs_root))
 
-        batches: list[dict[str, Any]] = []
-        candidate_dirs = [
-            d for d in runs_root.iterdir()
-            if d.is_dir() and (
-                (d / "manifest.json").is_file()
-                or (d / "batch.yaml").is_file()
-                or (d / "run_spec.json").is_file()
-                or (d / "summary.json").is_file()
-                or (d / "results.csv").is_file()
-            )
-        ]
-        # Sort newest first based on directory mtime
-        candidate_dirs.sort(key=lambda d: d.stat().st_mtime, reverse=True)
 
-        for b_dir in candidate_dirs:
-            b_id = b_dir.name
-            manifest_path = b_dir / "manifest.json"
-            batch_yaml_path = b_dir / "batch.yaml"
-            results_csv_path = b_dir / "results.csv"
+##
+# show_run
+##
 
-            status = "unknown"
-            total_runs = 0
-            completed = 0
-            success_count = 0
+_PROGRESS_KEYS = ("total", "queued", "running", "done", "failed", "timeout", "skipped")
 
-            if manifest_path.is_file() or batch_yaml_path.is_file():
-                # 1. Inspect batch.yaml
-                if batch_yaml_path.is_file():
-                    try:
-                        b_yaml = yaml.safe_load(batch_yaml_path.read_text(encoding="utf-8"))
-                        if isinstance(b_yaml, dict):
-                            b_id = b_yaml.get("batch_id", b_id)
-                            status = b_yaml.get("status", status)
-                    except Exception as exc:
-                        logger.debug("Failed reading %s: %s", batch_yaml_path, exc)
 
-                # 2. Inspect manifest.json
-                if manifest_path.is_file():
-                    try:
-                        manifest = BatchManifest.load(manifest_path)
-                        total_runs = len(manifest.runs)
-                        completed = sum(1 for r in manifest.runs if r.status == RunStatus.DONE.value)
-                        for r in manifest.runs:
-                            if r.terminal_cause == "goal_reached" or r.exit_code == 0:
-                                success_count += 1
-                        if status == "unknown":
-                            if total_runs > 0 and completed == total_runs:
-                                status = "done"
-                            elif any(r.status == RunStatus.RUNNING.value for r in manifest.runs):
-                                status = "running"
-                            elif all(r.status == RunStatus.QUEUED.value for r in manifest.runs):
-                                status = "queued"
-                            else:
-                                status = "partial"
-                    except Exception as exc:
-                        logger.debug("Failed reading %s: %s", manifest_path, exc)
+def _duration_s(started_at: Any, ended_at: Any) -> float | None:
+    if not (started_at and ended_at):
+        return None
+    try:
+        return max(0.0, (datetime.fromisoformat(ended_at) - datetime.fromisoformat(started_at)).total_seconds())
+    except (TypeError, ValueError):
+        return None
 
-                # 3. Inspect results.csv for more accurate success counts
-                if results_csv_path.is_file():
-                    try:
-                        with results_csv_path.open("r", encoding="utf-8") as f:
-                            reader = csv.DictReader(f)
-                            csv_rows = list(reader)
-                            if total_runs == 0 and csv_rows:
-                                total_runs = len(csv_rows)
-                            if completed == 0 and csv_rows:
-                                completed = len(csv_rows)
-                            if csv_rows:
-                                success_count = sum(
-                                    1 for row in csv_rows
-                                    if str(row.get("success", "")).strip().lower() in ("true", "1")
-                                )
-                    except Exception as exc:
-                        logger.debug("Failed reading %s: %s", results_csv_path, exc)
-            else:
-                # Standalone single run directory
-                total_runs = 1
-                summary_path = b_dir / "summary.json"
-                summary_data: dict[str, Any] = {}
-                if summary_path.is_file():
-                    try:
-                        raw = json.loads(summary_path.read_text(encoding="utf-8"))
-                        if isinstance(raw, dict):
-                            summary_data = raw
-                    except Exception as exc:
-                        logger.debug("Failed reading %s: %s", summary_path, exc)
 
-                terminal_cause = summary_data.get("terminal_cause")
-                success = False
-                if "success" in summary_data:
-                    success = bool(summary_data["success"])
-                elif terminal_cause == "goal_reached":
-                    success = True
+def _show_batch(batch_dir: Path) -> dict[str, Any]:
+    declared = _load_dict(load_yaml, batch_dir / "batch.yaml")
+    batch_id = declared.get("batch_id", batch_dir.name)
+    status = declared.get("status", "unknown")
+    started_at = declared.get("started_at", declared.get("created_at"))
+    ended_at = declared.get("ended_at")
+    spec_summary = declared.get("spec", {})
 
-                if summary_data:
-                    completed = 1
-                    if terminal_cause:
-                        status = "done" if terminal_cause not in ("timeout", "failed") else terminal_cause
-                    else:
-                        status = "done"
-                    if success:
-                        success_count = 1
-                elif results_csv_path.is_file():
-                    try:
-                        with results_csv_path.open("r", encoding="utf-8") as f:
-                            rows = list(csv.DictReader(f))
-                            if rows:
-                                completed = 1
-                                r_row = rows[0]
-                                if str(r_row.get("success", "")).strip().lower() in ("true", "1"):
-                                    success = True
-                                    success_count = 1
-                                terminal_cause = r_row.get("terminal_cause")
-                                if terminal_cause:
-                                    status = "done" if terminal_cause not in ("timeout", "failed") else terminal_cause
-                                else:
-                                    status = "done"
-                    except Exception as exc:
-                        logger.debug("Failed reading %s: %s", results_csv_path, exc)
-                elif (b_dir / "worker.log").is_file():
-                    status = "finished"
-                elif (b_dir / "run_spec.json").is_file():
-                    status = "queued"
+    progress = dict.fromkeys(_PROGRESS_KEYS, 0)
+    manifest_path = batch_dir / "manifest.json"
+    manifest = _load_manifest(manifest_path) if manifest_path.is_file() else None
+    if manifest is not None:
+        progress["total"] = len(manifest.runs)
+        for record in manifest.runs:
+            key = record.status.lower()
+            progress[key] = progress.get(key, 0) + 1
+        if status == "unknown":
+            status = _infer_batch_status(manifest.runs)
+        if not spec_summary and manifest.metadata:
+            spec_summary = manifest.metadata
 
-            success_rate = (
-                round((success_count / completed) * 100.0, 1)
-                if completed > 0
-                else 0.0
-            )
+    rows = _read_csv_rows(batch_dir / "results.csv") if (batch_dir / "results.csv").is_file() else None
+    if rows is not None:
+        success_count = sum(1 for row in rows if _is_true(row.get("success", "")))
+    elif manifest is not None:
+        success_count = sum(1 for r in manifest.runs if _succeeded(r))
+    else:
+        success_count = 0
 
-            batches.append({
-                "batch_id": b_id,
-                "total": total_runs,
-                "total_runs": total_runs,
-                "completed": completed,
-                "success_rate": success_rate,
-                "status": status,
-            })
+    completed = progress["done"]
+    success_rate = round(success_count / completed * 100.0, 1) if completed > 0 else 0.0
+    return {
+        "type": "batch",
+        "batch_id": batch_id,
+        "status": status,
+        "batch_dir": str(batch_dir),
+        "progress": progress,
+        "duration": {"started_at": started_at, "ended_at": ended_at, "duration_s": _duration_s(started_at, ended_at)},
+        "spec": spec_summary,
+        "success_rate": success_rate,
+        "results_summary": {
+            "total": progress["total"],
+            "completed": completed,
+            "success": success_count,
+            "rate_pct": success_rate,
+        },
+    }
 
-        return batches
 
-    # Specific batch: list runs within it
-    target_dir = _resolve_batch_dir(batch_id, runs_root)
-    manifest_path = target_dir / "manifest.json"
-    results_csv_path = target_dir / "results.csv"
+@dataclass
+class _RunLocation:
+    """Everything found about one run across a run directory, a batch manifest, and a batch results.csv."""
 
-    csv_data_by_id: dict[str, dict[str, Any]] = {}
-    if results_csv_path.is_file():
-        try:
-            with results_csv_path.open("r", encoding="utf-8") as f:
-                for row in csv.DictReader(f):
-                    rid = row.get("run_id")
-                    if rid:
-                        csv_data_by_id[rid] = row
-        except Exception as exc:
-            logger.debug("Failed reading %s: %s", results_csv_path, exc)
+    run_id: str
+    run_dir: Path | None = None
+    record: RunRecord | None = None
+    csv_row: dict[str, Any] | None = None
+    batch_dir: Path | None = None
 
-    runs: list[dict[str, Any]] = []
 
-    if manifest_path.is_file():
-        try:
-            manifest = BatchManifest.load(manifest_path)
-            for r in manifest.runs:
-                csv_row = csv_data_by_id.get(r.id, {})
+def _find_direct_run_dir(identifier: str, runs_root: Path) -> tuple[Path | None, Path | None]:
+    """A run directory named directly (a path, or a name under runs_root); returns (run_dir, containing batch dir)."""
+    candidate = Path(identifier)
+    if _is_run_dir(candidate, _RUN_MARKERS + ("results.csv",)):
+        run_dir = candidate.resolve()
+        batch = run_dir.parent.resolve() if (run_dir.parent / "manifest.json").is_file() else None
+        return run_dir, batch
+    under_root = runs_root / identifier
+    if _is_run_dir(under_root, _RUN_MARKERS + ("results.csv",)):
+        return under_root.resolve(), None
+    return None, None
 
-                # Success resolution
-                success = False
-                if "success" in csv_row:
-                    success = str(csv_row["success"]).strip().lower() in ("true", "1")
-                elif r.terminal_cause == "goal_reached" or r.exit_code == 0:
-                    success = True
 
-                # Time to goal resolution
-                ttg: float | None = None
-                if "time_to_goal_s" in csv_row and csv_row["time_to_goal_s"]:
-                    try:
-                        ttg = float(csv_row["time_to_goal_s"])
-                    except ValueError:
-                        pass
-                elif (target_dir / (r.run_dir or r.id) / "summary.json").is_file():
-                    try:
-                        sum_data = json.loads((target_dir / (r.run_dir or r.id) / "summary.json").read_text(encoding="utf-8"))
-                        if "time_to_goal_s" in sum_data and sum_data["time_to_goal_s"] is not None:
-                            ttg = float(sum_data["time_to_goal_s"])
-                        if "success" in sum_data:
-                            success = bool(sum_data["success"])
-                    except Exception:
-                        pass
+def _find_record(manifest: BatchManifest, run_id: str) -> RunRecord | None:
+    return next((r for r in manifest.runs if run_id in (r.id, r.run_dir)), None)
 
-                terminal_cause = r.terminal_cause or csv_row.get("terminal_cause")
 
-                runs.append({
-                    "run_id": r.id,
-                    "method": r.method,
-                    "robot": r.robot,
-                    "route": r.route if r.route is not None else "custom",
-                    "seed": r.seed,
-                    "status": r.status,
-                    "terminal_cause": terminal_cause,
-                    "success": success,
-                    "time_to_goal": ttg,
-                    "time_to_goal_s": ttg,
-                })
-            return runs
-        except Exception as exc:
-            logger.debug("Failed reading manifest: %s", exc)
+def _locate_run(identifier: str, runs_root: Path) -> _RunLocation:
+    """Find a run by directory, manifest record, or results.csv row (searching every batch directory)."""
+    run_dir, batch_dir = _find_direct_run_dir(identifier, runs_root)
+    location = _RunLocation(run_id=run_dir.name if run_dir else identifier, run_dir=run_dir, batch_dir=batch_dir)
 
-    # Fallback to results.csv if manifest not found
-    for run_id, row in csv_data_by_id.items():
-        success = str(row.get("success", "")).strip().lower() in ("true", "1")
-        ttg_val: float | None = None
-        if row.get("time_to_goal_s"):
+    for batch in sorted(runs_root.iterdir()) if runs_root.is_dir() else []:
+        if not batch.is_dir():
+            continue
+        nested = batch / location.run_id
+        if _is_run_dir(nested):
+            location.run_dir, location.batch_dir = nested.resolve(), batch.resolve()
+
+        manifest = _load_manifest(batch / "manifest.json") if (batch / "manifest.json").is_file() else None
+        record = _find_record(manifest, location.run_id) if manifest is not None else None
+        if record is not None:
+            location.record, location.batch_dir, location.run_id = record, batch.resolve(), record.id
+            if location.run_dir is None:
+                location.run_dir = (batch / (record.run_dir or record.id)).resolve()
+
+        if location.csv_row is None:
+            row = next((r for r in _read_csv_rows(batch / "results.csv") if r.get("run_id") == location.run_id), None)
+            if row is not None:
+                location.csv_row, location.batch_dir = row, batch.resolve()
+                location.run_dir = location.run_dir or (batch / location.run_id).resolve()
+
+        if location.record is not None or (location.run_dir is not None and (location.run_dir / "summary.json").is_file()):
+            break
+    return location
+
+
+def _run_settings(location: _RunLocation, summary_dir: Path | None) -> dict[str, Any]:
+    """Settings for a run: its run_spec.json/settings.json, filled in from the manifest record and results row."""
+    settings: dict[str, Any] = {}
+    if summary_dir is not None:
+        settings.update(_load_dict(load_json, summary_dir / "run_spec.json"))
+        settings.update(_load_dict(load_json, summary_dir / "settings.json"))
+
+    record = location.record
+    if record is not None:
+        for key in ("method", "robot", "scene", "route"):
+            if not settings.get(key):
+                settings[key] = getattr(record, key)
+        settings.setdefault("seed", record.seed)
+        if record.method_params and not settings.get("method_params"):
+            settings["method_params"] = record.method_params
+
+    row = location.csv_row
+    if row:
+        for key in ("method", "robot", "scene", "route"):
+            if key not in settings and row.get(key):
+                settings[key] = row[key]
+        if "seed" not in settings and row.get("seed"):
             try:
-                ttg_val = float(row["time_to_goal_s"])
+                settings["seed"] = int(row["seed"])
             except ValueError:
                 pass
-        runs.append({
-            "run_id": run_id,
-            "method": row.get("method", "unknown"),
-            "robot": row.get("robot", "unknown"),
-            "route": row.get("route", "unknown"),
-            "seed": int(row.get("seed", 0)) if row.get("seed") else 0,
-            "status": RunStatus.DONE.value,
-            "terminal_cause": row.get("terminal_cause"),
-            "success": success,
-            "time_to_goal": ttg_val,
-            "time_to_goal_s": ttg_val,
-        })
 
-    return runs
+    if "policy" in settings and "method" not in settings:
+        settings["method"] = settings["policy"]
+    return settings
+
+
+def _terminal_outcome(
+    summary: dict[str, Any], record: RunRecord | None, row: dict[str, Any] | None
+) -> tuple[str | None, bool, int | None]:
+    """(terminal_cause, success, exit_code) from the best available source: summary, manifest, then results.csv."""
+    cause = summary.get("terminal_cause") or (record.terminal_cause if record else None) or (row or {}).get("terminal_cause")
+    cause = cause or None
+
+    if "success" in summary:
+        success = bool(summary["success"])
+    elif row and "success" in row:
+        success = _is_true(row["success"])
+    else:
+        success = cause == "goal_reached"
+
+    if record is not None and record.exit_code is not None:
+        exit_code: int | None = record.exit_code
+    elif cause == "goal_reached":
+        exit_code = 0
+    elif cause in ("failed", "timeout"):
+        exit_code = 1
+    else:
+        exit_code = 2 if cause else None
+    return cause, success, exit_code
+
+
+def _metric(summary: dict[str, Any], row: dict[str, Any] | None, key: str) -> float | None:
+    """A numeric metric from the summary, falling back to the results.csv row when the summary value is falsy."""
+    return _to_float(summary.get(key) or (row.get(key) if row else None))
+
+
+def _step_count(summary: dict[str, Any], row: dict[str, Any] | None, run_dir: Path | None) -> Any:
+    steps = summary.get("steps", summary.get("sim_steps"))
+    if steps is None and row and (row.get("plans") or row.get("sim_steps")):
+        steps = row.get("plans") or row.get("sim_steps")
+        try:
+            steps = int(steps)
+        except ValueError:
+            pass
+    if steps is None and run_dir is not None and (run_dir / "steps.jsonl").is_file():
+        try:
+            with (run_dir / "steps.jsonl").open("r", encoding="utf-8") as handle:
+                steps = sum(1 for _ in handle)
+        except OSError:
+            pass
+    return steps
+
+
+def _show_single_run(location: _RunLocation) -> dict[str, Any]:
+    run_dir, record, row = location.run_dir, location.record, location.csv_row
+    if row is None and location.batch_dir is not None:
+        # The batch scan may have stopped early; look the row up in the parent batch directly.
+        row = next(
+            (r for r in _read_csv_rows(location.batch_dir / "results.csv") if r.get("run_id") == location.run_id), None
+        )
+    summary = _load_dict(load_json, run_dir / "summary.json") if run_dir else {}
+    log_path = run_dir / "worker.log" if run_dir else None
+    cause, success, exit_code = _terminal_outcome(summary, record, row)
+
+    if record is not None:
+        status = record.status
+    elif cause:
+        status = _status_from_cause(cause)
+    elif log_path is not None and log_path.is_file():
+        status = "finished"
+    else:
+        status = "unknown"
+
+    return {
+        "type": "run",
+        "run_id": location.run_id,
+        "run_dir": str(run_dir) if run_dir is not None else None,
+        "status": status,
+        "outcome": {"terminal_cause": cause, "success": success, "exit_code": exit_code},
+        "metrics": {
+            "time_to_goal_s": _metric(summary, row, "time_to_goal_s"),
+            "path_length_m": _metric(summary, row, "path_length_m"),
+            "mean_inference_ms": _metric(summary, row, "mean_inference_ms"),
+            "steps": _step_count(summary, row, run_dir),
+            "sim_time_s": _metric(summary, row, "sim_time_s"),
+            "final_goal_distance_m": _metric(summary, row, "final_goal_distance_m"),
+        },
+        "settings": _run_settings(
+            _RunLocation(location.run_id, run_dir, record, row, location.batch_dir), run_dir
+        ),
+        "log_path": str(log_path) if log_path is not None and log_path.is_file() else None,
+    }
 
 
 def show_run(run_or_batch_id: str, runs_dir: Path) -> dict[str, Any]:
@@ -372,372 +577,20 @@ def show_run(run_or_batch_id: str, runs_dir: Path) -> dict[str, Any]:
         FileNotFoundError: If the target cannot be found.
     """
     runs_root = Path(runs_dir)
-
-    # 1. Check if run_or_batch_id refers to a batch
     try:
-        batch_dir = _resolve_batch_dir(run_or_batch_id, runs_root)
-        is_batch = True
+        return _show_batch(_resolve_batch_dir(run_or_batch_id, runs_root))
     except FileNotFoundError:
-        batch_dir = None
-        is_batch = False
+        pass
 
-    if is_batch and batch_dir is not None:
-        manifest_path = batch_dir / "manifest.json"
-        batch_yaml_path = batch_dir / "batch.yaml"
-        results_csv_path = batch_dir / "results.csv"
-
-        batch_id = batch_dir.name
-        status = "unknown"
-        started_at = None
-        ended_at = None
-        spec_summary: dict[str, Any] = {}
-
-        if batch_yaml_path.is_file():
-            try:
-                b_yaml = yaml.safe_load(batch_yaml_path.read_text(encoding="utf-8"))
-                if isinstance(b_yaml, dict):
-                    batch_id = b_yaml.get("batch_id", batch_id)
-                    status = b_yaml.get("status", status)
-                    started_at = b_yaml.get("started_at", b_yaml.get("created_at"))
-                    ended_at = b_yaml.get("ended_at")
-                    spec_summary = b_yaml.get("spec", {})
-            except Exception as exc:
-                logger.debug("Failed loading %s: %s", batch_yaml_path, exc)
-
-        progress = {
-            "total": 0,
-            "queued": 0,
-            "running": 0,
-            "done": 0,
-            "failed": 0,
-            "timeout": 0,
-            "skipped": 0,
-        }
-
-        if manifest_path.is_file():
-            try:
-                manifest = BatchManifest.load(manifest_path)
-                progress["total"] = len(manifest.runs)
-                for r in manifest.runs:
-                    st = r.status.lower()
-                    if st in progress:
-                        progress[st] += 1
-                    else:
-                        progress[st] = 1
-
-                if status == "unknown":
-                    if progress["total"] > 0 and progress["done"] == progress["total"]:
-                        status = "done"
-                    elif progress["running"] > 0:
-                        status = "running"
-                    elif progress["queued"] == progress["total"]:
-                        status = "queued"
-                    else:
-                        status = "partial"
-
-                if not spec_summary and manifest.metadata:
-                    spec_summary = manifest.metadata
-            except Exception as exc:
-                logger.debug("Failed loading manifest %s: %s", manifest_path, exc)
-
-        # Calculate duration if timestamps are present
-        duration_s: float | None = None
-        if started_at and ended_at:
-            try:
-                t0 = datetime.fromisoformat(started_at)
-                t1 = datetime.fromisoformat(ended_at)
-                duration_s = max(0.0, (t1 - t0).total_seconds())
-            except Exception:
-                pass
-
-        # Calculate success rate from results.csv or manifest
-        success_count = 0
-        if results_csv_path.is_file():
-            try:
-                with results_csv_path.open("r", encoding="utf-8") as f:
-                    for row in csv.DictReader(f):
-                        if str(row.get("success", "")).strip().lower() in ("true", "1"):
-                            success_count += 1
-            except Exception:
-                pass
-        elif manifest_path.is_file():
-            try:
-                manifest = BatchManifest.load(manifest_path)
-                success_count = sum(
-                    1 for r in manifest.runs
-                    if r.terminal_cause == "goal_reached" or r.exit_code == 0
-                )
-            except Exception:
-                pass
-
-        completed = progress["done"]
-        success_rate = (
-            round((success_count / completed) * 100.0, 1)
-            if completed > 0
-            else 0.0
-        )
-
-        return {
-            "type": "batch",
-            "batch_id": batch_id,
-            "status": status,
-            "batch_dir": str(batch_dir),
-            "progress": progress,
-            "duration": {
-                "started_at": started_at,
-                "ended_at": ended_at,
-                "duration_s": duration_s,
-            },
-            "spec": spec_summary,
-            "success_rate": success_rate,
-            "results_summary": {
-                "total": progress["total"],
-                "completed": completed,
-                "success": success_count,
-                "rate_pct": success_rate,
-            },
-        }
-
-    # 2. Check if run_or_batch_id refers to a single run
-    run_dir: Path | None = None
-    target_run_id = run_or_batch_id
-    manifest_rec: RunRecord | None = None
-    csv_row_data: dict[str, Any] | None = None
-    parent_batch_dir: Path | None = None
-
-    # Check direct directory path
-    cand_path = Path(run_or_batch_id)
-    if cand_path.is_dir() and ((cand_path / "run_spec.json").is_file() or (cand_path / "summary.json").is_file() or (cand_path / "worker.log").is_file() or (cand_path / "results.csv").is_file()):
-        run_dir = cand_path.resolve()
-        target_run_id = run_dir.name
-        if (run_dir.parent / "manifest.json").is_file():
-            parent_batch_dir = run_dir.parent.resolve()
-    elif (runs_root / run_or_batch_id).is_dir():
-        cand = (runs_root / run_or_batch_id).resolve()
-        if (cand / "run_spec.json").is_file() or (cand / "summary.json").is_file() or (cand / "worker.log").is_file() or (cand / "results.csv").is_file():
-            run_dir = cand
-            target_run_id = cand.name
-
-    # Check inside batch directories
-    if runs_root.is_dir():
-        for d in runs_root.iterdir():
-            if not d.is_dir():
-                continue
-
-            # 1. Check if folder exists inside batch
-            cand = d / target_run_id
-            if cand.is_dir() and ((cand / "run_spec.json").is_file() or (cand / "summary.json").is_file() or (cand / "worker.log").is_file()):
-                run_dir = cand.resolve()
-                parent_batch_dir = d.resolve()
-
-            # 2. Check manifest inside batch
-            manifest_path = d / "manifest.json"
-            if manifest_path.is_file():
-                try:
-                    manifest = BatchManifest.load(manifest_path)
-                    for r in manifest.runs:
-                        if r.id == target_run_id or r.run_dir == target_run_id:
-                            manifest_rec = r
-                            parent_batch_dir = d.resolve()
-                            target_run_id = r.id
-                            if run_dir is None:
-                                cand_sub = d / (r.run_dir or r.id)
-                                run_dir = cand_sub.resolve()
-                            break
-                except Exception as exc:
-                    logger.debug("Failed reading manifest in %s: %s", d, exc)
-
-            # 3. Check results.csv inside batch
-            results_csv_p = d / "results.csv"
-            if results_csv_p.is_file() and csv_row_data is None:
-                try:
-                    with results_csv_p.open("r", encoding="utf-8") as f:
-                        for row in csv.DictReader(f):
-                            if row.get("run_id") == target_run_id:
-                                csv_row_data = row
-                                parent_batch_dir = d.resolve()
-                                if run_dir is None:
-                                    run_dir = (d / target_run_id).resolve()
-                except Exception as exc:
-                    logger.debug("Failed reading results.csv in %s: %s", d, exc)
-
-            if manifest_rec is not None or (run_dir is not None and run_dir.is_dir() and (run_dir / "summary.json").is_file()):
-                break
-
-    if run_dir is None and manifest_rec is None and csv_row_data is None:
+    location = _locate_run(run_or_batch_id, runs_root)
+    if location.run_dir is None and location.record is None and location.csv_row is None:
         raise FileNotFoundError(f"Run or batch '{run_or_batch_id}' not found under {runs_dir}")
+    return _show_single_run(location)
 
-    # Inspect run artifacts if directory exists
-    summary_path = run_dir / "summary.json" if run_dir is not None else None
-    settings_path = run_dir / "settings.json" if run_dir is not None else None
-    spec_path = run_dir / "run_spec.json" if run_dir is not None else None
-    log_path = run_dir / "worker.log" if run_dir is not None else None
 
-    # Fallback to parent batch results.csv if not found yet
-    if csv_row_data is None and parent_batch_dir is not None and (parent_batch_dir / "results.csv").is_file():
-        try:
-            with (parent_batch_dir / "results.csv").open("r", encoding="utf-8") as f:
-                for row in csv.DictReader(f):
-                    if row.get("run_id") == target_run_id:
-                        csv_row_data = row
-        except Exception:
-            pass
-
-    summary_data: dict[str, Any] = {}
-    if summary_path and summary_path.is_file():
-        try:
-            raw = json.loads(summary_path.read_text(encoding="utf-8"))
-            if isinstance(raw, dict):
-                summary_data = raw
-        except Exception as exc:
-            logger.debug("Failed reading %s: %s", summary_path, exc)
-
-    settings_data: dict[str, Any] = {}
-    if spec_path and spec_path.is_file():
-        try:
-            settings_data.update(json.loads(spec_path.read_text(encoding="utf-8")))
-        except Exception as exc:
-            logger.debug("Failed reading %s: %s", spec_path, exc)
-    if settings_path and settings_path.is_file():
-        try:
-            settings_data.update(json.loads(settings_path.read_text(encoding="utf-8")))
-        except Exception as exc:
-            logger.debug("Failed reading %s: %s", settings_path, exc)
-
-    if manifest_rec is not None:
-        if not settings_data.get("method"):
-            settings_data["method"] = manifest_rec.method
-        if not settings_data.get("robot"):
-            settings_data["robot"] = manifest_rec.robot
-        if not settings_data.get("scene"):
-            settings_data["scene"] = manifest_rec.scene
-        if not settings_data.get("route"):
-            settings_data["route"] = manifest_rec.route
-        if "seed" not in settings_data:
-            settings_data["seed"] = manifest_rec.seed
-        if manifest_rec.method_params and not settings_data.get("method_params"):
-            settings_data["method_params"] = manifest_rec.method_params
-
-    if csv_row_data:
-        for k in ("method", "robot", "scene", "route"):
-            if k not in settings_data and csv_row_data.get(k):
-                settings_data[k] = csv_row_data[k]
-        if "seed" not in settings_data and csv_row_data.get("seed"):
-            try:
-                settings_data["seed"] = int(csv_row_data["seed"])
-            except ValueError:
-                pass
-
-    if "policy" in settings_data and "method" not in settings_data:
-        settings_data["method"] = settings_data["policy"]
-
-    # Terminal cause and success
-    terminal_cause = None
-    if summary_data.get("terminal_cause"):
-        terminal_cause = summary_data["terminal_cause"]
-    elif manifest_rec and manifest_rec.terminal_cause:
-        terminal_cause = manifest_rec.terminal_cause
-    elif csv_row_data and csv_row_data.get("terminal_cause"):
-        terminal_cause = csv_row_data["terminal_cause"]
-
-    success = False
-    if "success" in summary_data:
-        success = bool(summary_data["success"])
-    elif csv_row_data and "success" in csv_row_data:
-        success = str(csv_row_data["success"]).strip().lower() in ("true", "1")
-    elif terminal_cause == "goal_reached":
-        success = True
-
-    exit_code = None
-    if manifest_rec and manifest_rec.exit_code is not None:
-        exit_code = manifest_rec.exit_code
-    elif terminal_cause == "goal_reached":
-        exit_code = 0
-    elif terminal_cause in ("failed", "timeout"):
-        exit_code = 1
-    elif terminal_cause:
-        exit_code = 2
-
-    # Status resolution
-    if manifest_rec is not None:
-        status = manifest_rec.status
-    elif terminal_cause:
-        status = "done" if terminal_cause not in ("timeout", "failed") else terminal_cause
-    elif log_path and log_path.is_file():
-        status = "finished"
-    else:
-        status = "unknown"
-
-    ttg = summary_data.get("time_to_goal_s") or (csv_row_data.get("time_to_goal_s") if csv_row_data else None)
-    if ttg is not None:
-        try:
-            ttg = float(ttg)
-        except ValueError:
-            ttg = None
-
-    path_len = summary_data.get("path_length_m") or (csv_row_data.get("path_length_m") if csv_row_data else None)
-    if path_len is not None:
-        try:
-            path_len = float(path_len)
-        except ValueError:
-            path_len = None
-
-    mean_infer = summary_data.get("mean_inference_ms") or (csv_row_data.get("mean_inference_ms") if csv_row_data else None)
-    if mean_infer is not None:
-        try:
-            mean_infer = float(mean_infer)
-        except ValueError:
-            mean_infer = None
-
-    steps = summary_data.get("steps", summary_data.get("sim_steps"))
-    if steps is None and csv_row_data and (csv_row_data.get("plans") or csv_row_data.get("sim_steps")):
-        steps = csv_row_data.get("plans") or csv_row_data.get("sim_steps")
-        try:
-            steps = int(steps)
-        except ValueError:
-            pass
-    if steps is None and run_dir and (run_dir / "steps.jsonl").is_file():
-        try:
-            with (run_dir / "steps.jsonl").open("r", encoding="utf-8") as f:
-                steps = sum(1 for _ in f)
-        except Exception:
-            pass
-
-    final_dist = summary_data.get("final_goal_distance_m") or (csv_row_data.get("final_goal_distance_m") if csv_row_data else None)
-    if final_dist is not None:
-        try:
-            final_dist = float(final_dist)
-        except ValueError:
-            final_dist = None
-
-    sim_time = summary_data.get("sim_time_s") or (csv_row_data.get("sim_time_s") if csv_row_data else None)
-    if sim_time is not None:
-        try:
-            sim_time = float(sim_time)
-        except ValueError:
-            sim_time = None
-
-    return {
-        "type": "run",
-        "run_id": target_run_id,
-        "run_dir": str(run_dir) if run_dir is not None else None,
-        "status": status,
-        "outcome": {
-            "terminal_cause": terminal_cause,
-            "success": success,
-            "exit_code": exit_code,
-        },
-        "metrics": {
-            "time_to_goal_s": ttg,
-            "path_length_m": path_len,
-            "mean_inference_ms": mean_infer,
-            "steps": steps,
-            "sim_time_s": sim_time,
-            "final_goal_distance_m": final_dist,
-        },
-        "settings": settings_data,
-        "log_path": str(log_path) if log_path and log_path.is_file() else None,
-    }
+##
+# compare_batch
+##
 
 
 def _calc_mean_std(values: list[float]) -> tuple[float | None, float | None]:
@@ -751,6 +604,75 @@ def _calc_mean_std(values: list[float]) -> tuple[float | None, float | None]:
     else:
         std = 0.0
     return mean, std
+
+
+def _floats(rows: list[dict[str, Any]], key: str) -> list[float]:
+    values = (_to_float(str(r.get(key) or "").strip()) for r in rows)
+    return [v for v in values if v is not None]
+
+
+def _mean_std_text(values: list[float]) -> str:
+    mean, std = _calc_mean_std(values)
+    return f"{mean:.2f} ± {std:.2f}" if mean is not None and std is not None else "-"
+
+
+def _aggregate_group(name: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    successes = [r for r in rows if _is_true(r.get("success", ""))]
+    total = len(rows)
+    mean_inference, _ = _calc_mean_std(_floats(rows, "mean_inference_ms"))
+    return {
+        "group": name,
+        "total": total,
+        "success": len(successes),
+        "rate": f"{len(successes) / total * 100.0 if total else 0.0:.1f}%",
+        "ttg": _mean_std_text(_floats(successes, "time_to_goal_s")),  # successful runs only
+        "path_len": _mean_std_text(_floats(rows, "path_length_m")),
+        "collisions": sum(1 for r in rows if str(r.get("terminal_cause") or "").strip().lower() == "collision"),
+        "inference": f"{mean_inference:.1f}" if mean_inference is not None else "-",
+    }
+
+
+_TABLE_COLUMNS = (  # (header, row key, right-aligned)
+    (None, "group", False),
+    ("Total", "total", True),
+    ("Success", "success", True),
+    ("Rate (%)", "rate", True),
+    ("Time to Goal (s)", "ttg", False),
+    ("Path Length (m)", "path_len", False),
+    ("Collisions", "collisions", True),
+    ("Mean Infer (ms)", "inference", True),
+)
+
+
+def _format_table(by: str, table_rows: list[dict[str, Any]]) -> str:
+    headers = [header or by.capitalize() for header, _, _ in _TABLE_COLUMNS]
+    widths = [
+        max([len(headers[i])] + [len(str(row[key])) for row in table_rows])
+        for i, (_, key, _) in enumerate(_TABLE_COLUMNS)
+    ]
+    lines = [
+        "| " + " | ".join(h.ljust(widths[i]) for i, h in enumerate(headers)) + " |",
+        "|-" + "-|-".join("-" * w for w in widths) + "-|",
+    ]
+    for row in table_rows:
+        cells = [
+            str(row[key]).rjust(widths[i]) if right else str(row[key]).ljust(widths[i])
+            for i, (_, key, right) in enumerate(_TABLE_COLUMNS)
+        ]
+        lines.append("| " + " | ".join(cells) + " |")
+    return "\n".join(lines)
+
+
+def _dedupe_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep the latest row per run_id (retried runs are rewritten); rows without an id are all kept."""
+    by_id: dict[str, dict[str, Any]] = {}
+    without_id: list[dict[str, Any]] = []
+    for row in rows:
+        if row.get("run_id"):
+            by_id[row["run_id"]] = row
+        else:
+            without_id.append(row)
+    return list(by_id.values()) + without_id
 
 
 def compare_batch(batch_id: str, runs_dir: Path, by: str = "method") -> str:
@@ -773,154 +695,75 @@ def compare_batch(batch_id: str, runs_dir: Path, by: str = "method") -> str:
     if by_norm not in valid_group_keys:
         raise ValueError(f"Invalid grouping key '{by}'. Must be one of: {valid_group_keys}")
 
-    target_dir = _resolve_batch_dir(batch_id, Path(runs_dir))
-    csv_path = target_dir / "results.csv"
+    csv_path = _resolve_batch_dir(batch_id, Path(runs_dir)) / "results.csv"
     if not csv_path.is_file():
         raise FileNotFoundError(f"results.csv not found for batch '{batch_id}' at {csv_path}")
 
-    # Read rows, deduplicating by run_id (latest row wins for retried runs)
-    rows_by_id: dict[str, dict[str, Any]] = {}
-    rows_without_id: list[dict[str, Any]] = []
-    with csv_path.open("r", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for r in reader:
-            rid = r.get("run_id")
-            if rid:
-                rows_by_id[rid] = r
-            else:
-                rows_without_id.append(r)
-    rows: list[dict[str, Any]] = list(rows_by_id.values()) + rows_without_id
-
-    # Group by key
     groups: dict[str, list[dict[str, Any]]] = {}
-    for r in rows:
-        key_val = r.get(by_norm, "unknown")
-        if not key_val:
-            key_val = "unknown"
-        if key_val not in groups:
-            groups[key_val] = []
-        groups[key_val].append(r)
+    for row in _dedupe_rows(_read_csv_rows(csv_path)):
+        groups.setdefault(row.get(by_norm) or "unknown", []).append(row)
+    return _format_table(by, [_aggregate_group(name, groups[name]) for name in sorted(groups)])
 
-    # Build aggregation rows
-    table_rows: list[dict[str, Any]] = []
-    for group_name in sorted(groups.keys()):
-        group_rows = groups[group_name]
-        total = len(group_rows)
-        successes = [
-            r for r in group_rows
-            if str(r.get("success", "")).strip().lower() in ("true", "1")
-        ]
-        success_count = len(successes)
-        rate = (success_count / total * 100.0) if total > 0 else 0.0
 
-        # TTG over successful runs only
-        ttgs: list[float] = []
-        for r in successes:
-            val_str = str(r.get("time_to_goal_s") or "").strip()
-            if val_str:
-                try:
-                    ttgs.append(float(val_str))
-                except ValueError:
-                    pass
+##
+# find_run_spec_for_rerun
+##
 
-        mean_ttg, std_ttg = _calc_mean_std(ttgs)
-        if mean_ttg is not None and std_ttg is not None:
-            ttg_str = f"{mean_ttg:.2f} ± {std_ttg:.2f}"
-        else:
-            ttg_str = "-"
 
-        # Path length
-        path_lengths: list[float] = []
-        for r in group_rows:
-            pl_str = str(r.get("path_length_m") or "").strip()
-            if pl_str:
-                try:
-                    path_lengths.append(float(pl_str))
-                except ValueError:
-                    pass
+def _load_saved_spec(run_dir: Path) -> RunSpec | None:
+    spec_file = run_dir / "run_spec.json"
+    if not (run_dir.is_dir() and spec_file.is_file()):
+        return None
+    spec = RunSpec.from_json(spec_file.read_text(encoding="utf-8"))
+    validate_spec(spec)
+    return spec
 
-        mean_pl, std_pl = _calc_mean_std(path_lengths)
-        if mean_pl is not None and std_pl is not None:
-            pl_str = f"{mean_pl:.2f} ± {std_pl:.2f}"
-        else:
-            pl_str = "-"
 
-        # Collisions
-        collisions = sum(
-            1 for r in group_rows
-            if str(r.get("terminal_cause") or "").strip().lower() == "collision"
-        )
+def _inline_route(routes: Any, name: str | None) -> dict[str, Any] | None:
+    """The sweep's inline route definition called ``name`` (one with its own spawn and goal), if any."""
+    for route in routes if isinstance(routes, list) else []:
+        if isinstance(route, dict) and route.get("name") == name:
+            return route if "spawn" in route and "goal" in route else None
+    return None
 
-        # Inference ms
-        inf_times: list[float] = []
-        for r in group_rows:
-            inf_str = str(r.get("mean_inference_ms") or "").strip()
-            if inf_str:
-                try:
-                    inf_times.append(float(inf_str))
-                except ValueError:
-                    pass
 
-        mean_inf, _ = _calc_mean_std(inf_times)
-        if mean_inf is not None:
-            inf_str = f"{mean_inf:.1f}"
-        else:
-            inf_str = "-"
+def _spec_from_record(batch_dir: Path, record: RunRecord, run_dir: Path) -> RunSpec:
+    """Rebuild a RunSpec for a run that has no run_spec.json from its manifest record and the batch's batch.yaml."""
+    batch_spec = _load_dict(load_yaml, batch_dir / "batch.yaml").get("spec", {})
+    options = (batch_spec.get("options") if isinstance(batch_spec, dict) else None) or {}
+    inline = _inline_route(batch_spec.get("routes") if isinstance(batch_spec, dict) else None, record.route)
 
-        table_rows.append({
-            "group": group_name,
-            "total": total,
-            "success": success_count,
-            "rate": f"{rate:.1f}%",
-            "ttg": ttg_str,
-            "path_len": pl_str,
-            "collisions": collisions,
-            "inference": inf_str,
-        })
+    spec = RunSpec(
+        method=record.method,
+        robot=record.robot,
+        scene=record.scene,
+        route=None if inline else record.route,
+        spawn=tuple(inline["spawn"]) if inline else None,
+        goal=tuple(inline["goal"]) if inline else None,
+        spawn_yaw=inline.get("spawn_yaw") if inline else None,
+        seed=record.seed,
+        method_params=record.method_params,
+        limits=EpisodeLimits.from_options(options),
+        viz=VizCfg.from_options(options),
+        output_dir=run_dir,
+    )
+    validate_spec(spec)
+    return spec
 
-    # Format Markdown / ASCII table
-    header_title = by.capitalize()
-    headers = [
-        header_title,
-        "Total",
-        "Success",
-        "Rate (%)",
-        "Time to Goal (s)",
-        "Path Length (m)",
-        "Collisions",
-        "Mean Infer (ms)",
-    ]
 
-    # Compute column widths
-    widths = [len(h) for h in headers]
-    for r in table_rows:
-        widths[0] = max(widths[0], len(str(r["group"])))
-        widths[1] = max(widths[1], len(str(r["total"])))
-        widths[2] = max(widths[2], len(str(r["success"])))
-        widths[3] = max(widths[3], len(str(r["rate"])))
-        widths[4] = max(widths[4], len(str(r["ttg"])))
-        widths[5] = max(widths[5], len(str(r["path_len"])))
-        widths[6] = max(widths[6], len(str(r["collisions"])))
-        widths[7] = max(widths[7], len(str(r["inference"])))
+def _rerun_from_batch(batch_dir: Path, run_id: str) -> tuple[Path, RunSpec] | None:
+    nested = batch_dir / run_id
+    spec = _load_saved_spec(nested)
+    if spec is not None:
+        return nested.resolve(), spec
 
-    header_line = "| " + " | ".join(h.ljust(widths[i]) for i, h in enumerate(headers)) + " |"
-    sep_line = "|-" + "-|-".join("-" * widths[i] for i in range(len(headers))) + "-|"
-
-    lines = [header_line, sep_line]
-    for r in table_rows:
-        row_line = (
-            f"| {str(r['group']).ljust(widths[0])} "
-            f"| {str(r['total']).rjust(widths[1])} "
-            f"| {str(r['success']).rjust(widths[2])} "
-            f"| {str(r['rate']).rjust(widths[3])} "
-            f"| {str(r['ttg']).ljust(widths[4])} "
-            f"| {str(r['path_len']).ljust(widths[5])} "
-            f"| {str(r['collisions']).rjust(widths[6])} "
-            f"| {str(r['inference']).rjust(widths[7])} |"
-        )
-        lines.append(row_line)
-
-    return "\n".join(lines)
+    manifest = _load_manifest(batch_dir / "manifest.json") if (batch_dir / "manifest.json").is_file() else None
+    record = _find_record(manifest, run_id) if manifest is not None else None
+    if record is None:
+        return None
+    run_dir = batch_dir / (record.run_dir or record.id)
+    spec = _load_saved_spec(run_dir) or _spec_from_record(batch_dir, record, run_dir)
+    return run_dir.resolve(), spec
 
 
 def find_run_spec_for_rerun(run_id: str, runs_dir: Path) -> tuple[Path, RunSpec]:
@@ -937,95 +780,15 @@ def find_run_spec_for_rerun(run_id: str, runs_dir: Path) -> tuple[Path, RunSpec]
         FileNotFoundError: If the run or run spec cannot be found.
     """
     runs_root = Path(runs_dir)
+    for candidate in (Path(run_id), runs_root / run_id):
+        spec = _load_saved_spec(candidate)
+        if spec is not None:
+            return candidate.resolve(), spec
 
-    # 1. Direct path check
-    cand_path = Path(run_id)
-    if cand_path.is_dir() and (cand_path / "run_spec.json").is_file():
-        spec = RunSpec.from_json((cand_path / "run_spec.json").read_text(encoding="utf-8"))
-        validate_spec(spec)
-        return cand_path.resolve(), spec
-
-    # 2. Check directly under runs_root
-    cand = runs_root / run_id
-    if cand.is_dir() and (cand / "run_spec.json").is_file():
-        spec = RunSpec.from_json((cand / "run_spec.json").read_text(encoding="utf-8"))
-        validate_spec(spec)
-        return cand.resolve(), spec
-
-    # 3. Check inside batch folders
-    if runs_root.is_dir():
-        for b_dir in runs_root.iterdir():
-            if not b_dir.is_dir():
-                continue
-
-            # Check direct subfolder match
-            sub_cand = b_dir / run_id
-            if sub_cand.is_dir() and (sub_cand / "run_spec.json").is_file():
-                spec = RunSpec.from_json((sub_cand / "run_spec.json").read_text(encoding="utf-8"))
-                validate_spec(spec)
-                return sub_cand.resolve(), spec
-
-            # Check manifest inside batch folder
-            manifest_path = b_dir / "manifest.json"
-            if manifest_path.is_file():
-                try:
-                    manifest = BatchManifest.load(manifest_path)
-                    for r in manifest.runs:
-                        if r.id == run_id or r.run_dir == run_id:
-                            target_run_dir = b_dir / (r.run_dir or r.id)
-                            spec_file = target_run_dir / "run_spec.json"
-                            if spec_file.is_file():
-                                spec = RunSpec.from_json(spec_file.read_text(encoding="utf-8"))
-                                validate_spec(spec)
-                                return target_run_dir.resolve(), spec
-
-                            # Reconstruct RunSpec from RunRecord and batch.yaml
-                            batch_yaml_path = b_dir / "batch.yaml"
-                            opts: dict[str, Any] = {}
-                            b_yaml: dict[str, Any] = {}
-                            if batch_yaml_path.is_file():
-                                try:
-                                    b_yaml = yaml.safe_load(batch_yaml_path.read_text(encoding="utf-8")) or {}
-                                    if isinstance(b_yaml, dict):
-                                        opts = b_yaml.get("spec", {}).get("options", {}) or {}
-                                except Exception:
-                                    pass
-
-                            limits = EpisodeLimits.from_options(opts)
-                            viz = VizCfg.from_options(opts)
-
-                            # Check for custom inline route definitions in batch.yaml
-                            spawn = None
-                            goal = None
-                            spawn_yaw = None
-                            route_val = r.route
-                            routes_cfg = b_yaml.get("spec", {}).get("routes", []) if isinstance(b_yaml, dict) else []
-                            for rt in routes_cfg:
-                                if isinstance(rt, dict) and rt.get("name") == r.route:
-                                    if "spawn" in rt and "goal" in rt:
-                                        spawn = tuple(rt["spawn"])
-                                        goal = tuple(rt["goal"])
-                                        spawn_yaw = rt.get("spawn_yaw")
-                                        route_val = None
-                                    break
-
-                            spec = RunSpec(
-                                method=r.method,
-                                robot=r.robot,
-                                scene=r.scene,
-                                route=route_val,
-                                spawn=spawn,
-                                goal=goal,
-                                spawn_yaw=spawn_yaw,
-                                seed=r.seed,
-                                method_params=r.method_params,
-                                limits=limits,
-                                viz=viz,
-                                output_dir=target_run_dir,
-                            )
-                            validate_spec(spec)
-                            return target_run_dir.resolve(), spec
-                except Exception as exc:
-                    logger.debug("Failed reading manifest in %s: %s", b_dir, exc)
+    for batch_dir in sorted(runs_root.iterdir()) if runs_root.is_dir() else []:
+        if batch_dir.is_dir():
+            found = _rerun_from_batch(batch_dir, run_id)
+            if found is not None:
+                return found
 
     raise FileNotFoundError(f"Could not find run or spec for '{run_id}' under {runs_dir}")
