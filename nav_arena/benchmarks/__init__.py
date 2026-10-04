@@ -5,12 +5,6 @@
 
 """Benchmarks package for nav_arena runs, sweeps, and tracking."""
 
-from nav_arena.benchmarks.session import (
-    EpisodeSpec,
-    RunSession,
-    SessionKey,
-    print_result_summary,
-)
 from nav_arena.benchmarks.spec import (
     VALID_METHODS,
     VALID_METHOD_FAMILIES,
@@ -20,6 +14,13 @@ from nav_arena.benchmarks.spec import (
     apply_overrides,
     validate_spec,
 )
+
+_SESSION_EXPORTS = {
+    "EpisodeSpec",
+    "RunSession",
+    "SessionKey",
+    "print_result_summary",
+}
 
 __all__ = [
     "EpisodeLimits",
@@ -34,3 +35,11 @@ __all__ = [
     "print_result_summary",
     "validate_spec",
 ]
+
+
+def __getattr__(name: str):
+    if name in _SESSION_EXPORTS:
+        from nav_arena.benchmarks import session
+        return getattr(session, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
