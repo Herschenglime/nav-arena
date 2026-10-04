@@ -335,30 +335,3 @@ def test_overlay_receives_the_stop_flag_and_is_recorded_in_settings(tmp_path):
     run_episode(FakeTask(), GoalSeeker(stop=True), _cfg(overlay=overlay, max_steps=30, warmup_steps=0, output_dir=out))
     assert all(stop for _, stop, _ in overlay.updates[1:])
     assert json.loads((out / "settings.json").read_text())["episode"]["overlay"] == "FakeOverlay"
-
-
-def test_step_pacer_evens_out_uneven_step_costs():
-    """Verify a cheap step after expensive ones is stretched to the smoothed period instead of running at full speed."""
-    from nav_arena.methods.in_process.runner import StepPacer
-
-    now = [0.0]
-    pacer = StepPacer(0.02, smoothing=0.5, clock=lambda: now[0], sleep=lambda d: now.__setitem__(0, now[0] + d))
-    for cost in [0.06, 0.06, 0.06]:
-        now[0] += cost
-        pacer.wait()
-    before = now[0]
-    now[0] += 0.005
-    pacer.wait()
-    assert now[0] - before == pytest.approx(0.03, abs=1e-6)
-
-
-def test_step_pacer_fast_steps_play_at_real_time():
-    """Verify steps cheaper than step_dt are slept up to step_dt, never faster than real time."""
-    from nav_arena.methods.in_process.runner import StepPacer
-
-    now = [0.0]
-    pacer = StepPacer(0.02, clock=lambda: now[0], sleep=lambda d: now.__setitem__(0, now[0] + d))
-    for _ in range(50):
-        now[0] += 0.005
-        pacer.wait()
-    assert now[0] == pytest.approx(50 * 0.02, rel=0.02)

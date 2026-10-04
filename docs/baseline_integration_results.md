@@ -18,7 +18,7 @@ Isaac harness; upstream-file fixes live on the NavDP fork (`Herschenglime/NavDP`
 | Policy contract | `step(PolicyObservation) -> Plan(path_body, stop, diagnostics)`; planner at 5 Hz (ViNT 3 Hz), shared lookahead follower at 50 Hz. |
 | Task | `PointNavTask` generalized over robot and camera; lateral-force collision check for Dingo; `tipped` termination; goal-image capture. |
 | Runner | `scripts/verify_baseline.py`: episode recorder (`settings.json`, `steps.jsonl`, `summary.json`, RGB/depth snapshots), terminal causes `goal_reached / collision / tipped / time_out / stalled / max_steps`. |
-| Viewing | Follow camera, viewport-only goal pin, tolerance ring and plan overlay (`omni.ui.scene`, not visible to the robot's cameras), GUI step pacing. |
+| Viewing | Follow camera, viewport-only goal pin, tolerance ring and plan overlay (`omni.ui.scene`, not visible to the robot's cameras). |
 | Tools | `tools/route_map.py` draws routes or a recorded run (trajectory, stops, plans) over the occupancy map. |
 | Tests | 195 unit tests; Dingo integration tests (straight drive, camera depth, iPlanner reaches goal). |
 | Bug found | `launch_simulation_app` swallowed every failure (exit 0). Fixed; it had hidden a failing integration test. |
@@ -78,17 +78,17 @@ Established:
   (60% of steps), step with a display render ~64 ms (30%), plan step with camera render + inference ~86 ms (10%).
   Overall ~0.5x real time.
 
-Tried, did not fix: `StepPacer` (uniform wall-clock step time, `--pace`) and a lower display render rate
-(`--viewer-render-hz` 15 -> 10). Both are kept (harmless, results are unchanged), but the jolting persists.
+Tried, did not fix: pacing every step to one smoothed wall-clock duration, plus lowering the display render rate
+from 15 to 10 Hz. Neither changed what the GUI shows, so both were reverted (commit `bc5fbbd`, reverted afterwards).
 
 Hypotheses not yet tested:
 1. **Viewport frame presentation:** the display render only happens on `task.sim.render()` calls and on
-   `render_interval` steps. Kit may be presenting frames independently of our pacing, so the pacing can't help. Test:
+   `render_interval` steps. Kit may present frames independently of our step timing, which would explain why pacing did nothing. Test:
    render the viewport every step with the camera sensor disabled and see whether motion is smooth; then re-enable.
 2. **Follow camera sampling:** the camera pose is updated every step but drawn only on some. Test: smooth the
    camera with a low-pass filter, or update it only on render steps.
 3. **Physics interpolation:** poses shown at 10-15 Hz from a 50 Hz state can alias with 0.3 m/s motion. Test: set
-   `--viewer-render-hz` to a divisor of 50 (10, 25) and compare; try the Isaac Lab/Kit rendering mode that
+   `EpisodeCfg.viewer_render_hz` to a divisor of 50 (10, 25) and compare; try the Isaac Lab/Kit rendering mode that
    decouples rendering from stepping.
 4. **GPU contention between the sensor render and the viewport render** (same RTX context). Test: lower camera
    resolution, or render the viewport at the same steps as the sensor.
