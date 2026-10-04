@@ -24,6 +24,7 @@ from isaaclab.app import AppLauncher
 from nav_arena.core import launch_simulation_app
 from nav_arena.methods import list_policies
 from nav_arena.utils import RUNS_DIR, add_logger_args, configure_logging, get_logger
+from nav_arena.utils.cli_args import validate_route_args
 
 logger = get_logger("verify_baseline")
 
@@ -77,6 +78,10 @@ parser.add_argument("--output", type=Path, default=None, help="Run output direct
 add_logger_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
+try:
+    validate_route_args(args_cli.route, args_cli.spawn, args_cli.goal)
+except ValueError as error:
+    parser.error(str(error))
 # The baselines are camera-driven: RTX rendering must be enabled before the app boots.
 args_cli.enable_cameras = True
 GUI = "kit" in (getattr(args_cli, "visualizer", None) or [])
@@ -103,7 +108,7 @@ def run_verification():
     from nav_arena.scenes import DEFAULT_ROUTE, get_route
     from nav_arena.tasks import PointNavTask, create_point_nav_env_cfg
 
-    if args_cli.spawn and args_cli.goal:
+    if args_cli.spawn is not None:
         spawn_xy, goal_xy = tuple(args_cli.spawn), tuple(args_cli.goal)
         spawn_yaw = (
             args_cli.spawn_yaw
