@@ -497,17 +497,8 @@ def expand_sweep_matrix(spec: SweepSpec) -> list[PlannedRun]:
                     run_id = f"{idx:03d}_{method}_{robot}_{route_name}_s{seed}"
 
                     opts = spec.options or {}
-                    limits = EpisodeLimits(
-                        max_steps=int(opts.get("max_steps", 1500)),
-                        goal_tolerance=float(opts.get("goal_tolerance", opts.get("goal_dist", 0.4))),
-                        max_speed=float(opts.get("max_speed", 0.3)),
-                        stall_timeout_s=float(opts.get("stall_timeout_s", opts.get("stall_timeout", 10.0))),
-                    )
-                    viz = VizCfg(
-                        gui=bool(opts.get("gui", False)),
-                        follow_camera=bool(opts.get("follow_camera", False)),
-                        goal_overlay=bool(opts.get("goal_overlay", True)),
-                    )
+                    limits = EpisodeLimits.from_options(opts)
+                    viz = VizCfg.from_options(opts)
 
                     params = copy.deepcopy(spec.method_params.get(method, {}))
 

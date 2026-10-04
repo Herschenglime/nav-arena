@@ -8,13 +8,14 @@
 from __future__ import annotations
 
 import ast
-from dataclasses import asdict, dataclass, field
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, field, fields
 import hashlib
 import json
 import logging
 import math
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from nav_arena.utils.cli_args import validate_route_args
 
@@ -33,18 +34,51 @@ def _normalize_for_serialization(val: Any) -> Any:
     return val
 
 
+class ResolvedViz(NamedTuple):
+    """Visualization settings with every default resolved against ``gui``."""
+
+    gui: bool
+    follow_camera: bool
+    goal_overlay: bool
+
+
 @dataclass
 class VizCfg:
-    """Visualization settings for simulation rendering and debug displays."""
+    """Visualization settings for simulation rendering and debug displays.
+
+    ``follow_camera`` and ``goal_overlay`` default to ``None`` ("auto"), meaning they follow ``gui``: on with a GUI,
+    off when headless. Use :meth:`resolved` to get concrete values; it is the only place that rule lives.
+    """
 
     gui: bool = False
-    follow_camera: bool = False
-    goal_overlay: bool = True
+    follow_camera: bool | None = None
+    goal_overlay: bool | None = None
+    follow_distance: float = 1.6
+    follow_height: float = 1.2
+    show_goal_marker: bool = False
+    """Draw Isaac Lab's goal arrow as scene geometry. The policy's cameras see it as an obstacle."""
 
     def __post_init__(self) -> None:
         self.gui = bool(self.gui)
-        self.follow_camera = bool(self.follow_camera)
-        self.goal_overlay = bool(self.goal_overlay)
+        self.follow_camera = None if self.follow_camera is None else bool(self.follow_camera)
+        self.goal_overlay = None if self.goal_overlay is None else bool(self.goal_overlay)
+        self.follow_distance = float(self.follow_distance)
+        self.follow_height = float(self.follow_height)
+        self.show_goal_marker = bool(self.show_goal_marker)
+
+    def resolved(self) -> ResolvedViz:
+        """Concrete follow-camera and overlay flags: unset values follow ``gui``."""
+        return ResolvedViz(
+            gui=self.gui,
+            follow_camera=self.gui if self.follow_camera is None else self.follow_camera,
+            goal_overlay=self.gui if self.goal_overlay is None else self.goal_overlay,
+        )
+
+    @classmethod
+    def from_options(cls, options: Mapping[str, Any]) -> VizCfg:
+        """Build from a flat options mapping (sweep ``options``, batch.yaml); absent keys keep their defaults."""
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in options.items() if k in known and v is not None})
 
 
 @dataclass
@@ -61,6 +95,18 @@ class EpisodeLimits:
         self.goal_tolerance = float(self.goal_tolerance)
         self.max_speed = float(self.max_speed)
         self.stall_timeout_s = float(self.stall_timeout_s)
+
+    @classmethod
+    def from_options(cls, options: Mapping[str, Any]) -> EpisodeLimits:
+        """Build from a flat options mapping, accepting the CLI aliases ``goal_dist`` and ``stall_timeout``."""
+        aliases = {"goal_dist": "goal_tolerance", "stall_timeout": "stall_timeout_s"}
+        known = {f.name for f in fields(cls)}
+        values: dict[str, Any] = {}
+        for key, value in options.items():
+            name = aliases.get(key, key)
+            if name in known and value is not None:
+                values.setdefault(name, value)
+        return cls(**values)
 
 
 @dataclass
@@ -112,7 +158,7 @@ class RunSpec:
         Runtime output destination (output_dir) and visualizer settings (viz)
         do not alter the benchmark experiment definition and are excluded.
         """
-        canonical_data = {
+        canonical_data: dict[str, Any] = {
             "goal": [float(x) for x in self.goal] if self.goal is not None else None,
             "limits": asdict(self.limits),
             "method": self.method,
@@ -125,6 +171,10 @@ class RunSpec:
             "spawn": [float(x) for x in self.spawn] if self.spawn is not None else None,
             "spawn_yaw": float(self.spawn_yaw) if self.spawn_yaw is not None else None,
         }
+        if self.viz.show_goal_marker:
+            # It changes what the policy's cameras see, so it is part of the experiment (omitted when off so hashes
+            # of runs recorded before this field existed stay valid).
+            canonical_data["show_goal_marker"] = True
         canonical_json = json.dumps(
             canonical_data, sort_keys=True, separators=(",", ":"), default=str
         )
@@ -271,6 +321,120 @@ def validate_spec(spec: RunSpec) -> None:
         )
 
 
+_WARN_KEYS = ("robot", "scene")
+_PLAIN_KEYS = ("route", "spawn_yaw", "method_family")
+_LIMIT_KEYS = {
+    "max_steps": "max_steps",
+    "goal_tolerance": "goal_tolerance",
+    "goal_dist": "goal_tolerance",
+    "max_speed": "max_speed",
+    "stall_timeout_s": "stall_timeout_s",
+    "stall_timeout": "stall_timeout_s",
+}
+_VIZ_KEYS = ("gui", "follow_camera", "goal_overlay", "follow_distance", "follow_height", "show_goal_marker")
+_PARAM_ALIASES = {"planner_device": "device"}
+"""CLI-style names that are stored under a different policy-config field."""
+
+
+def _parse_policy_arg(item: str) -> tuple[str, Any]:
+    """Parse ``KEY=VALUE`` into a key and a Python literal (or the raw string)."""
+    key, sep, value = item.partition("=")
+    if not sep:
+        raise ValueError(f"--policy-arg expects KEY=VALUE, got '{item}'")
+    try:
+        return key, ast.literal_eval(value)
+    except (ValueError, SyntaxError):
+        return key, value
+
+
+def _override_method(data: dict[str, Any], flag: str, value: Any, overrides: dict[str, Any], log: logging.Logger) -> None:
+    old = data["method"]
+    data["method"] = value
+    if "method_family" not in overrides and "--method-family" not in overrides:
+        data["method_family"] = "ros2" if value == "nav2" else "in_process"
+    log.warning("%s overrides spec.method: %s -> %s", flag, old, value)
+
+
+def _override_seed(data: dict[str, Any], flag: str, value: Any, log: logging.Logger) -> None:
+    old = data["seed"]
+    if isinstance(value, (list, tuple)):
+        if len(value) != 1:
+            raise ValueError(f"Single episode spec cannot accept multiple seeds: {value}")
+        value = value[0]
+    data["seed"] = int(value)
+    log.info("%s overrides spec.seed: %s -> %s", flag, old, data["seed"])
+
+
+def _override_policy_args(data: dict[str, Any], flag: str, value: Any, log: logging.Logger) -> None:
+    for item in value if isinstance(value, (list, tuple)) else [value]:
+        if isinstance(item, dict):
+            data["method_params"].update(_normalize_for_serialization(item))
+            log.info("%s overrides spec.method_params: %s", flag, item)
+        elif isinstance(item, str):
+            key, parsed = _parse_policy_arg(item)
+            old = data["method_params"].get(key)
+            data["method_params"][key] = _normalize_for_serialization(parsed)
+            log.info("%s overrides spec.method_params.%s: %s -> %s", flag, key, old, parsed)
+
+
+def _override_viz(data: dict[str, Any], flag: str, key: str, value: Any, log: logging.Logger) -> None:
+    """Override one visualization field; ``no_<name>`` flags negate a boolean field."""
+    if key.startswith("no_"):
+        key, value = key[3:], not bool(value)
+    old = data["viz"][key]
+    data["viz"][key] = value if key in ("follow_distance", "follow_height") else bool(value)
+    log.info("%s overrides spec.viz.%s: %s -> %s", flag, key, old, data["viz"][key])
+
+
+def _apply_override(
+    data: dict[str, Any], raw_key: str, value: Any, overrides: dict[str, Any], log: logging.Logger
+) -> None:
+    flag = raw_key if raw_key.startswith("--") else f"--{raw_key.replace('_', '-')}"
+    key = raw_key.lstrip("-").replace("-", "_")
+
+    if key == "method":
+        _override_method(data, flag, value, overrides, log)
+    elif key in _WARN_KEYS:
+        old, data[key] = data[key], value
+        log.warning("%s overrides spec.%s: %s -> %s", flag, key, old, value)
+    elif key in _PLAIN_KEYS:
+        old, data[key] = data[key], value
+        log.info("%s overrides spec.%s: %s -> %s", flag, key, old, value)
+    elif key in ("seed", "seeds"):
+        _override_seed(data, flag, value, log)
+    elif key in ("output", "output_dir"):
+        old, data["output_dir"] = data["output_dir"], (str(value) if value is not None else None)
+        log.info("%s overrides spec.output_dir: %s -> %s", flag, old, data["output_dir"])
+    elif key in ("spawn", "goal"):
+        old, data[key] = data[key], ([float(x) for x in value] if value is not None else None)
+        log.info("%s overrides spec.%s: %s -> %s", flag, key, old, data[key])
+    elif key == "limits":
+        old = dict(data["limits"])
+        data["limits"].update(asdict(value) if isinstance(value, EpisodeLimits) else dict(value))
+        log.info("%s overrides spec.limits: %s -> %s", flag, old, data["limits"])
+    elif key in _LIMIT_KEYS:
+        field_name = _LIMIT_KEYS[key]
+        old, data["limits"][field_name] = data["limits"][field_name], value
+        log.info("%s overrides spec.limits.%s: %s -> %s", flag, field_name, old, value)
+    elif key == "viz":
+        old = dict(data["viz"])
+        data["viz"].update(asdict(value) if isinstance(value, VizCfg) else dict(value))
+        log.info("%s overrides spec.viz: %s -> %s", flag, old, data["viz"])
+    elif key in _VIZ_KEYS or (key.startswith("no_") and key[3:] in _VIZ_KEYS):
+        _override_viz(data, flag, key, value, log)
+    elif key in ("policy_arg", "policy_args"):
+        _override_policy_args(data, flag, value, log)
+    elif key == "method_params":
+        old = dict(data["method_params"])
+        data["method_params"].update(_normalize_for_serialization(value))
+        log.info("%s overrides spec.method_params: %s -> %s", flag, old, data["method_params"])
+    else:
+        param = _PARAM_ALIASES.get(key, key)
+        old = data["method_params"].get(param)
+        data["method_params"][param] = _normalize_for_serialization(value)
+        log.info("%s overrides spec.method_params.%s: %s -> %s", flag, param, old, data["method_params"][param])
+
+
 def apply_overrides(
     spec: RunSpec,
     overrides: dict[str, Any],
@@ -278,8 +442,8 @@ def apply_overrides(
 ) -> RunSpec:
     """Return a new RunSpec with overridden fields applied, logging each override.
 
-    Logs a WARNING if method, scene, or robot is overridden.
-    Logs an INFO for all other field overrides.
+    Logs a WARNING if method, scene, or robot is overridden, and an INFO for every other field.
+    Unrecognized keys are treated as policy config fields (``method_params``).
 
     Args:
         spec: Base RunSpec providing defaults.
@@ -289,120 +453,8 @@ def apply_overrides(
     Returns:
         A new RunSpec with overrides applied.
     """
-    if logger is None:
-        logger = logging.getLogger("nav_arena.benchmarks.spec")
-
+    log = logger if logger is not None else logging.getLogger("nav_arena.benchmarks.spec")
     data = spec.to_dict()
-
-    for raw_key, new_val in overrides.items():
-        flag = raw_key if raw_key.startswith("--") else f"--{raw_key.replace('_', '-')}"
-        clean_key = raw_key.lstrip("-").replace("-", "_")
-
-        if clean_key == "method":
-            old_val = data["method"]
-            data["method"] = new_val
-            if "method_family" not in overrides and "--method-family" not in overrides:
-                data["method_family"] = "ros2" if new_val == "nav2" else "in_process"
-            logger.warning("%s overrides spec.method: %s -> %s", flag, old_val, new_val)
-
-        elif clean_key in ("robot", "scene"):
-            old_val = data[clean_key]
-            data[clean_key] = new_val
-            logger.warning("%s overrides spec.%s: %s -> %s", flag, clean_key, old_val, new_val)
-
-        elif clean_key in ("route", "spawn_yaw", "method_family"):
-            old_val = data[clean_key]
-            data[clean_key] = new_val
-            logger.info("%s overrides spec.%s: %s -> %s", flag, clean_key, old_val, new_val)
-
-        elif clean_key in ("seed", "seeds"):
-            old_val = data["seed"]
-            resolved_seed = new_val
-            if isinstance(new_val, (list, tuple)):
-                if len(new_val) == 1:
-                    resolved_seed = new_val[0]
-                else:
-                    raise ValueError(f"Single episode spec cannot accept multiple seeds: {new_val}")
-            data["seed"] = int(resolved_seed)
-            logger.info("%s overrides spec.seed: %s -> %s", flag, old_val, data["seed"])
-
-        elif clean_key in ("output", "output_dir"):
-            old_val = data["output_dir"]
-            data["output_dir"] = str(new_val) if new_val is not None else None
-            logger.info("%s overrides spec.output_dir: %s -> %s", flag, old_val, data["output_dir"])
-
-        elif clean_key in ("spawn", "goal"):
-            old_val = data[clean_key]
-            data[clean_key] = [float(x) for x in new_val] if new_val is not None else None
-            logger.info("%s overrides spec.%s: %s -> %s", flag, clean_key, old_val, data[clean_key])
-
-        elif clean_key == "limits":
-            old_val = data["limits"]
-            lim_dict = asdict(new_val) if isinstance(new_val, EpisodeLimits) else dict(new_val)
-            data["limits"].update(lim_dict)
-            logger.info("%s overrides spec.limits: %s -> %s", flag, old_val, data["limits"])
-
-        elif clean_key in (
-            "max_steps",
-            "goal_tolerance",
-            "max_speed",
-            "stall_timeout_s",
-            "goal_dist",
-            "stall_timeout",
-        ):
-            mapped_key = (
-                "goal_tolerance"
-                if clean_key == "goal_dist"
-                else ("stall_timeout_s" if clean_key == "stall_timeout" else clean_key)
-            )
-            old_val = data["limits"][mapped_key]
-            data["limits"][mapped_key] = new_val
-            logger.info("%s overrides spec.limits.%s: %s -> %s", flag, mapped_key, old_val, new_val)
-
-        elif clean_key == "viz":
-            old_val = data["viz"]
-            viz_dict = asdict(new_val) if isinstance(new_val, VizCfg) else dict(new_val)
-            data["viz"].update(viz_dict)
-            logger.info("%s overrides spec.viz: %s -> %s", flag, old_val, data["viz"])
-
-        elif clean_key in ("gui", "follow_camera", "goal_overlay"):
-            old_val = data["viz"][clean_key]
-            data["viz"][clean_key] = bool(new_val)
-            logger.info("%s overrides spec.viz.%s: %s -> %s", flag, clean_key, old_val, data["viz"][clean_key])
-
-        elif clean_key in ("no_gui", "no_follow_camera", "no_goal_overlay"):
-            target_key = clean_key[3:]  # 'gui', 'follow_camera', 'goal_overlay'
-            old_val = data["viz"][target_key]
-            data["viz"][target_key] = not bool(new_val)
-            logger.info("%s overrides spec.viz.%s: %s -> %s", flag, target_key, old_val, data["viz"][target_key])
-
-        elif clean_key in ("policy_arg", "policy_args"):
-            items = new_val if isinstance(new_val, (list, tuple)) else [new_val]
-            for item in items:
-                if isinstance(item, dict):
-                    data["method_params"].update(_normalize_for_serialization(item))
-                    logger.info("%s overrides spec.method_params: %s", flag, item)
-                elif isinstance(item, str):
-                    k, sep, v = item.partition("=")
-                    if not sep:
-                        raise ValueError(f"--policy-arg expects KEY=VALUE, got '{item}'")
-                    try:
-                        parsed_v = ast.literal_eval(v)
-                    except (ValueError, SyntaxError):
-                        parsed_v = v
-                    old_v = data["method_params"].get(k)
-                    data["method_params"][k] = _normalize_for_serialization(parsed_v)
-                    logger.info("%s overrides spec.method_params.%s: %s -> %s", flag, k, old_v, parsed_v)
-
-        elif clean_key == "method_params":
-            old_val = data["method_params"]
-            data["method_params"].update(_normalize_for_serialization(new_val))
-            logger.info("%s overrides spec.method_params: %s -> %s", flag, old_val, data["method_params"])
-
-        else:
-            old_val = data["method_params"].get(clean_key)
-            norm_val = _normalize_for_serialization(new_val)
-            data["method_params"][clean_key] = norm_val
-            logger.info("%s overrides spec.method_params.%s: %s -> %s", flag, clean_key, old_val, norm_val)
-
+    for raw_key, value in overrides.items():
+        _apply_override(data, raw_key, value, overrides, log)
     return RunSpec.from_dict(data)

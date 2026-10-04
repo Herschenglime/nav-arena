@@ -114,23 +114,17 @@ def build_spec_from_cli(args: argparse.Namespace) -> RunSpec:
     if getattr(args, "plan_hz", None) is not None:
         method_params["plan_hz"] = args.plan_hz
     if getattr(args, "planner_device", None) is not None:
-        method_params["planner_device"] = args.planner_device
-    if getattr(args, "show_goal_marker", False):
-        method_params["show_goal_marker"] = True
-    if getattr(args, "follow_distance", 1.6) != 1.6:
-        method_params["follow_distance"] = args.follow_distance
-    if getattr(args, "follow_height", 1.2) != 1.2:
-        method_params["follow_height"] = args.follow_height
+        method_params["device"] = args.planner_device
     method_params.update(_parse_policy_args(getattr(args, "policy_arg", []) or []))
 
     gui = ("kit" in (getattr(args, "visualizer", None) or [])) and not getattr(args, "headless", False)
-    follow = args.follow_camera if getattr(args, "follow_camera", None) is not None else gui
-    overlay = args.goal_overlay if getattr(args, "goal_overlay", None) is not None else gui
-
     viz = VizCfg(
         gui=gui,
-        follow_camera=follow,
-        goal_overlay=overlay,
+        follow_camera=getattr(args, "follow_camera", None),
+        goal_overlay=getattr(args, "goal_overlay", None),
+        follow_distance=getattr(args, "follow_distance", 1.6),
+        follow_height=getattr(args, "follow_height", 1.2),
+        show_goal_marker=bool(getattr(args, "show_goal_marker", False)),
     )
     limits = EpisodeLimits(
         max_steps=getattr(args, "max_steps", 1500),

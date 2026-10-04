@@ -247,15 +247,14 @@ class RunSession:
             logger.section(f"BASELINE '{self.key.method}' ON '{self.key.robot}': {self.key.scene}/{route_name}")
             logger.info(f"Spawn {spawn_xy} (yaw {math.degrees(spawn_yaw):.0f} deg) -> goal {goal_xy}")
 
-            gui = bool(self.key.viz.gui)
-            follow = self.key.viz.follow_camera if self.key.viz.follow_camera is not None else gui
-            overlay_enabled = self.key.viz.goal_overlay if self.key.viz.goal_overlay is not None else gui
+            viz = self.key.viz.resolved()
+            gui, follow, overlay_enabled = viz.gui, viz.follow_camera, viz.goal_overlay
 
             limits = ep.limits
             step_dt = 0.02
             task_param = self.key.method_params.get("task", None)
             enable_goal_camera = task_param == "imagegoal" or (task_param is None and self.key.method == "vint")
-            show_goal_marker = bool(self.key.method_params.get("show_goal_marker", False))
+            show_goal_marker = self.key.viz.show_goal_marker
             if show_goal_marker:
                 logger.warning("Goal marker enabled: policies' cameras will see it as an obstacle at the goal.")
 
@@ -280,9 +279,7 @@ class RunSession:
             if follow:
                 from nav_arena.utils.viewer import ThirdPersonView
 
-                follow_dist = float(self.key.method_params.get("follow_distance", 1.6))
-                follow_height = float(self.key.method_params.get("follow_height", 1.2))
-                self.viewer = ThirdPersonView(distance=follow_dist, height=follow_height)
+                self.viewer = ThirdPersonView(distance=self.key.viz.follow_distance, height=self.key.viz.follow_height)
                 logger.info("Third-person follow camera enabled")
             elif gui:
                 self.task.sim.set_camera_view(
@@ -295,26 +292,8 @@ class RunSession:
                 self.task.sim.render()
 
             # 4. Construct policy
-            cfg_kwargs = dict(
-                device=self.key.method_params.get("planner_device") or str(self.task.device),
-                seed=ep.seed,
-            )
-            if task_param is not None:
-                cfg_kwargs["task"] = task_param
-            if "plan_hz" in self.key.method_params:
-                cfg_kwargs["plan_hz"] = self.key.method_params["plan_hz"]
-
-            reserved_keys = {
-                "task",
-                "plan_hz",
-                "planner_device",
-                "show_goal_marker",
-                "follow_distance",
-                "follow_height",
-            }
-            for k, v in self.key.method_params.items():
-                if k not in reserved_keys:
-                    cfg_kwargs[k] = v
+            cfg_kwargs: dict[str, Any] = {"device": str(self.task.device), "seed": ep.seed}
+            cfg_kwargs.update(self.key.method_params)  # policy config fields only (task, plan_hz, device, ...)
 
             logger.info(f"Loading policy '{self.key.method}' ({cfg_kwargs})...")
             self.policy = get_policy(self.key.method, self.task.get_camera_intrinsics(), **cfg_kwargs)

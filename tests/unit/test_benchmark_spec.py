@@ -53,8 +53,11 @@ class TestBenchmarkSpecDataclasses:
     def test_viz_cfg_defaults(self):
         viz = VizCfg()
         assert viz.gui is False
-        assert viz.follow_camera is False
-        assert viz.goal_overlay is True
+        assert viz.follow_camera is None  # "auto": follows gui
+        assert viz.goal_overlay is None
+        assert viz.follow_distance == 1.6
+        assert viz.follow_height == 1.2
+        assert viz.show_goal_marker is False
 
     def test_episode_limits_defaults(self):
         limits = EpisodeLimits()
@@ -449,3 +452,68 @@ class TestBenchmarkSpecOverrides:
         )
         assert updated.method_params["plan_hz"] == 20.0
         assert updated.method_params["fear_threshold"] == 0.8
+
+
+class TestVizResolution:
+    """The follow camera and overlay default to "auto" and follow the GUI flag in exactly one place."""
+
+    @pytest.mark.parametrize("gui", [False, True])
+    @pytest.mark.parametrize("value", [None, True, False])
+    def test_resolved_follows_gui_only_when_unset(self, gui, value):
+        resolved = VizCfg(gui=gui, follow_camera=value, goal_overlay=value).resolved()
+        expected = gui if value is None else value
+        assert resolved.gui is gui
+        assert resolved.follow_camera is expected
+        assert resolved.goal_overlay is expected
+
+    def test_unset_flags_survive_serialization(self):
+        spec = RunSpec(method="iplanner", viz=VizCfg(gui=True))
+        restored = RunSpec.from_json(spec.to_json())
+        assert restored.viz.follow_camera is None
+        assert restored.viz.resolved().follow_camera is True
+
+    def test_old_specs_with_explicit_booleans_still_load(self):
+        spec = RunSpec.from_dict({"method": "iplanner", "viz": {"gui": True, "follow_camera": False, "goal_overlay": True}})
+        assert spec.viz.resolved() == (True, False, True)
+
+    def test_from_options_keeps_defaults_for_absent_keys(self):
+        viz = VizCfg.from_options({"gui": True, "follow_distance": 2.5, "unrelated": 1})
+        assert viz.gui is True and viz.follow_distance == 2.5
+        assert viz.follow_camera is None and viz.goal_overlay is None
+
+    def test_limits_from_options_accepts_cli_aliases(self):
+        limits = EpisodeLimits.from_options({"goal_dist": 0.7, "stall_timeout": 3, "max_steps": 99})
+        assert (limits.goal_tolerance, limits.stall_timeout_s, limits.max_steps) == (0.7, 3.0, 99)
+
+    def test_negated_and_distance_overrides(self):
+        spec = apply_overrides(RunSpec(method="iplanner"), {"no_follow_camera": True, "follow_distance": 3.0})
+        assert spec.viz.follow_camera is False and spec.viz.follow_distance == 3.0
+        assert apply_overrides(RunSpec(method="iplanner"), {"planner_device": "cpu"}).method_params == {"device": "cpu"}
+
+    def test_show_goal_marker_changes_the_spec_hash_only_when_enabled(self):
+        base = RunSpec(method="iplanner")
+        assert RunSpec(method="iplanner", viz=VizCfg(gui=True)).spec_hash == base.spec_hash
+        assert RunSpec(method="iplanner", viz=VizCfg(show_goal_marker=True)).spec_hash != base.spec_hash
+
+
+def test_run_cli_gui_flag_defaults_follow_camera_on(tmp_path):
+    """Verify ``nav_arena run --gui`` builds a spec whose follow camera and overlay resolve to on (the regression)."""
+    from unittest.mock import patch
+
+    from nav_arena.cli import main
+
+    captured = {}
+
+    def fake_exec(spec, run_dir, **kwargs):
+        captured["spec"] = spec
+        return 0
+
+    with patch("nav_arena.cli.run.execute_single_run_process", side_effect=fake_exec), patch(
+        "nav_arena.cli.run.check_preflight_processes", return_value=[]
+    ):
+        assert main(["run", "--method", "iplanner", "--gui", "--output", str(tmp_path / "r")]) == 0
+        assert captured["spec"].viz.resolved() == (True, True, True)
+        assert main(["run", "--method", "iplanner", "--output", str(tmp_path / "r2")]) == 0
+        assert captured["spec"].viz.resolved() == (False, False, False)
+        assert main(["run", "--method", "iplanner", "--gui", "--no-follow-camera", "--output", str(tmp_path / "r3")]) == 0
+        assert captured["spec"].viz.resolved() == (True, False, True)

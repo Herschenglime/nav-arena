@@ -166,11 +166,7 @@ def handle_run(args: argparse.Namespace) -> int:
             max_speed=args.max_speed if args.max_speed is not None else 0.3,
             stall_timeout_s=args.stall_timeout if args.stall_timeout is not None else 10.0,
         )
-        viz = VizCfg(
-            gui=args.gui if args.gui is not None else False,
-            follow_camera=args.follow_camera if args.follow_camera is not None else False,
-            goal_overlay=args.goal_overlay if args.goal_overlay is not None else True,
-        )
+        viz = VizCfg(gui=bool(args.gui), follow_camera=args.follow_camera, goal_overlay=args.goal_overlay)
         spec = RunSpec(
             method=args.method,
             robot=args.robot if args.robot is not None else "dingo",

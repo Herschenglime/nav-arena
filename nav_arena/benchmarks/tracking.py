@@ -991,32 +991,8 @@ def find_run_spec_for_rerun(run_id: str, runs_dir: Path) -> tuple[Path, RunSpec]
                                 except Exception:
                                     pass
 
-                            max_steps = int(opts["max_steps"]) if opts.get("max_steps") is not None else 1500
-                            goal_tolerance = (
-                                float(opts["goal_tolerance"])
-                                if opts.get("goal_tolerance") is not None
-                                else (float(opts["goal_dist"]) if opts.get("goal_dist") is not None else 0.4)
-                            )
-                            max_speed = float(opts["max_speed"]) if opts.get("max_speed") is not None else 0.3
-                            stall_timeout_s = (
-                                float(opts["stall_timeout_s"])
-                                if opts.get("stall_timeout_s") is not None
-                                else (float(opts["stall_timeout"]) if opts.get("stall_timeout") is not None else 10.0)
-                            )
-                            limits = EpisodeLimits(
-                                max_steps=max_steps,
-                                goal_tolerance=goal_tolerance,
-                                max_speed=max_speed,
-                                stall_timeout_s=stall_timeout_s,
-                            )
-                            gui = bool(opts["gui"]) if opts.get("gui") is not None else False
-                            follow_camera = bool(opts["follow_camera"]) if opts.get("follow_camera") is not None else False
-                            goal_overlay = bool(opts["goal_overlay"]) if opts.get("goal_overlay") is not None else True
-                            viz = VizCfg(
-                                gui=gui,
-                                follow_camera=follow_camera,
-                                goal_overlay=goal_overlay,
-                            )
+                            limits = EpisodeLimits.from_options(opts)
+                            viz = VizCfg.from_options(opts)
 
                             # Check for custom inline route definitions in batch.yaml
                             spawn = None

@@ -358,9 +358,10 @@ def test_build_spec_from_cli():
     assert spec.seed == 7
     assert spec.method_params["task"] == "pointgoal"
     assert spec.method_params["plan_hz"] == 10.0
-    assert spec.method_params["planner_device"] == "cuda:0"
-    assert spec.method_params["follow_distance"] == 2.0
-    assert spec.method_params["follow_height"] == 1.5
+    assert spec.method_params["device"] == "cuda:0"
+    assert spec.viz.follow_distance == 2.0
+    assert spec.viz.follow_height == 1.5
+    assert "follow_distance" not in spec.method_params
     assert spec.method_params["test_k"] == 123
     assert spec.limits.max_steps == 2000
     assert spec.limits.goal_tolerance == 0.5
@@ -484,3 +485,39 @@ def test_build_spec_from_cli_headless_overrides_viz_kit():
     spec = build_spec_from_cli(mock_args)
     assert spec.viz.gui is False
 
+
+
+@pytest.mark.parametrize(
+    ("gui", "follow", "overlay", "expect_viewer", "expect_overlay"),
+    [
+        (False, None, None, False, False),  # headless default: no display aids
+        (True, None, None, True, True),  # --gui: follow camera and overlay on by default
+        (True, False, None, False, True),  # --gui --no-follow-camera
+        (False, True, True, True, True),  # explicit opt-in without a GUI
+    ],
+)
+def test_run_session_builds_viewer_and_overlay_from_resolved_viz(tmp_path, gui, follow, overlay, expect_viewer, expect_overlay):
+    """Verify the follow camera and goal overlay are created exactly when the resolved viz settings ask for them."""
+    spec = _sample_spec(route="hall_straight")
+    spec.output_dir = tmp_path / "run_dir"
+    spec.viz = VizCfg(gui=gui, follow_camera=follow, goal_overlay=overlay)
+    mock_task = MagicMock()
+    mock_task.device = "cpu"
+    dummy_res = DummyResult(terminal_cause="goal_reached", success=True)
+
+    with (
+        patch("nav_arena.tasks.PointNavTask", return_value=mock_task),
+        patch("nav_arena.tasks.create_point_nav_env_cfg", return_value=MagicMock()),
+        patch("nav_arena.methods.in_process.get_policy", return_value=MagicMock()),
+        patch("nav_arena.methods.in_process.run_episode", return_value=dummy_res) as mock_run_ep,
+        patch("nav_arena.utils.viewer.ThirdPersonView") as mock_view,
+        patch("nav_arena.utils.viewer.DebugOverlay") as mock_overlay,
+    ):
+        with RunSession(spec, simulation_app=MagicMock()) as session:
+            session.run_episode()
+        episode_cfg = mock_run_ep.call_args[0][2]
+
+    assert (episode_cfg.viewer is not None) == expect_viewer
+    assert (episode_cfg.overlay is not None) == expect_overlay
+    assert mock_view.called == expect_viewer
+    assert mock_overlay.called == expect_overlay
