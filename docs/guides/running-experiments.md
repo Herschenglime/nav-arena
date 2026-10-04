@@ -57,8 +57,8 @@ nav_arena run --method x_navdp --robot nova_carter --scene kujiale_0003 \
 - `--spawn-yaw`: Initial robot yaw in radians.
 - `--seed`: Random seed (default: 0).
 - `--gui` / `--no-gui`: Enable or disable the interactive Omniverse Kit viewport window.
-- `--follow-camera`: Attach viewport camera to the robot.
-- `--goal-overlay`: Render 2D screen overlay showing goal distance and direction (default: enabled).
+- `--follow-camera` / `--no-follow-camera`: Third-person camera that tracks the robot (default: on with `--gui`, off headless).
+- `--goal-overlay` / `--no-goal-overlay`: Viewport-only goal pin, tolerance ring and the policy's current path (default: on with `--gui`, off headless). It is a UI layer, so the policy's cameras never see it.
 - `--max-steps`: Episode step budget at 50 Hz (default: 1500 = 30 s).
 - `--goal-dist`: Goal tolerance radius in meters (default: 0.4 m).
 - `--max-speed`: Maximum linear velocity limit (default: 0.3 m/s).

@@ -1,8 +1,23 @@
 # Design: a unified `nav_arena` entry point with batch runs and run tracking
 
-Status: **design only, nothing here is built.** Written to be handed to a fresh implementation session, so the first
-section is everything that session needs to know. Decisions marked **(decided)** were settled with the project owner;
-anything under "Open items" is still undecided.
+Status: **phases 0-4 are implemented** (lazy Dingo asset, `RunSpec` + worker, `nav_arena run`, `sweep` with manifest
+and resume, `runs list/show/compare/rerun`, `doctor`, `routes`, `map`). **Phases 5-7 are not built** (in-place resets,
+Nav2 backend, drive-aware follower). The sections below are the design record; "Implementation notes" lists where the
+code chose differently. Decisions marked **(decided)** were settled with the project owner; anything under "Open
+items" is still undecided.
+
+### Implementation notes (where the code differs from the design as written)
+
+- The CLI is a package, `nav_arena/cli/` (`run`, `sweep`, `runs`, `tools`, shared `_common`), not one `cli.py`.
+- The worker library is `nav_arena/benchmarks/` (`spec`, `session`, `worker`, `manifest`, `sweep`, `tracking`,
+  `doctor`) plus `launcher` (the one place that starts a worker subprocess, used by `run` and `sweep`), `results`
+  (the results.csv schema), `guard` (running-simulator detection) and `io` (tolerant file readers).
+- `expand_sweep_matrix` returns `PlannedRun(run_id, spec, route_label)` entries.
+- `VizCfg.follow_camera` / `goal_overlay` are tri-state (`None` follows `gui`) and resolved in `VizCfg.resolved()`;
+  `follow_distance`, `follow_height` and `show_goal_marker` live in `VizCfg`, not `method_params`.
+- `--jobs` exists on `sweep` but only `1` is accepted. `--wait` (for the busy guard) was not added.
+- The recorder refuses to overwrite a recorded run directory; the orchestrator clears a retried run explicitly.
+- Policies expose `reseed(seed)`, called at the start of every episode.
 
 ## Read this first (handoff context)
 

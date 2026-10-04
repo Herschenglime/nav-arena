@@ -275,7 +275,7 @@ pytest -c nav_arena/pyproject.toml -m "not integration" -q
 
 The codebase is organized into cleanly decoupled subsystems:
 
-- **CLI & Orchestration ([`nav_arena.cli`](file:///home/robopi/simulation/nav_arena/nav_arena/cli.py))**: Main command-line entry point supporting `run`, `sweep`, `runs`, `doctor`, `routes`, and `map`. Imports zero simulator or machine learning modules for fast (<0.15s) execution.
+- **CLI & Orchestration ([`nav_arena.cli`](file:///home/robopi/simulation/nav_arena/nav_arena/cli/))**: Main command-line entry point supporting `run`, `sweep`, `runs`, `doctor`, `routes`, and `map`. Imports zero simulator or machine learning modules for fast (<0.15s) execution.
 - **Benchmarks & Sweeps ([`nav_arena.benchmarks`](file:///home/robopi/simulation/nav_arena/nav_arena/benchmarks/))**: Unified evaluation harness: `RunSpec` validation, session lifecycle management (`RunSession`), worker subprocess runner (`worker.py`), atomic manifest tracking (`BatchManifest`), Cartesian sweep matrix planner (`sweep.py`), result aggregation and comparison (`tracking.py`), and system diagnostics (`doctor.py`).
 - **Core Simulation ([`nav_arena.core`](file:///home/robopi/simulation/nav_arena/nav_arena/core/app.py))**: Centralized SimulationApp lifecycle management ([`launch_simulation_app`](file:///home/robopi/simulation/nav_arena/nav_arena/core/app.py)), boot-time OmniGraph/ROS 2 extension flag injection, and livestreaming configuration.
 - **Embodiments ([`nav_arena.embodiments`](file:///home/robopi/simulation/nav_arena/nav_arena/embodiments/))**: Robot physical properties, kinematic configurations (`DifferentialDriveAction`), pure kinematics math ([`diff_drive_ik`](file:///home/robopi/simulation/nav_arena/nav_arena/embodiments/kinematics.py)), programmatic sensor rigging (planar 360° LiDAR), and in-memory URDF synthesis ([`generate_robot_urdf`](file:///home/robopi/simulation/nav_arena/nav_arena/embodiments/urdf.py)). Completely decoupled from ROS 2 middleware dependencies. Derived assets are resolved lazily on demand.
@@ -308,7 +308,7 @@ nav_arena/
 │   ├── routes/                        # Route/run overlay images from tools/route_map.py
 │   └── runs/                          # Baseline run recordings and batch sweeps (manifests, results.csv)
 ├── nav_arena/
-│   ├── cli.py                         # Unified entry point (run, sweep, runs, doctor, routes, map)
+│   ├── cli/                           # Unified entry point package (run, sweep, runs, doctor, routes, map)
 │   ├── config/                        # RViz visualization layouts and displays
 │   ├── core/                          # SimulationApp lifecycle & boot-time extension injection
 │   │   ├── __init__.py                # Exports launch_simulation_app
@@ -319,6 +319,10 @@ nav_arena/
 │   │   ├── worker.py                  # Subprocess worker entry point
 │   │   ├── manifest.py                # BatchManifest atomic state machine
 │   │   ├── sweep.py                   # Matrix expansion and sweep execution loop
+│   │   ├── launcher.py                # Worker subprocess launch, log streaming, timeout (shared by run and sweep)
+│   │   ├── results.py                 # results.csv schema and row helpers
+│   │   ├── guard.py                   # Running-simulator detection before a run starts
+│   │   ├── io.py                      # Tolerant JSON/YAML readers for run files
 │   │   ├── tracking.py                # Run querying, summaries, and results.csv comparisons
 │   │   └── doctor.py                  # System diagnostic health auditor
 │   ├── embodiments/                   # Robot kinematics, sensor factories, in-memory URDF

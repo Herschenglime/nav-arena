@@ -10,7 +10,7 @@ The codebase strictly enforces separation of concerns across nine dedicated modu
 
 ```text
 nav_arena/
-├── cli.py        # Main entry point (run, sweep, runs, doctor, routes, map) - ZERO simulator imports
+├── cli/          # Main entry point package (run, sweep, runs, doctor, routes, map) - ZERO simulator imports
 ├── benchmarks/   # Unified benchmark engine: RunSpec, RunSession, worker, manifest, sweep, tracking, doctor
 ├── core/         # SimulationApp lifecycle & boot-time extension injection
 ├── embodiments/  # Robot kinematics, sensor configs, in-memory URDF synthesis (ZERO ROS 2 dependencies)
@@ -163,7 +163,9 @@ Each item below cost real debugging time; the "why" is the part to remember. How
 **Lifecycle and processes**
 - **`launch_simulation_app` ends the process on exit.** `SimulationApp.close()` terminates it, so code after the `with` block never runs; return results by calling `sys.exit(n)` inside the block (an unhandled exception exits 1 with a logged traceback). Before this was fixed, every failure exited 0 and hid a failing integration test.
 - **One Isaac app per process**, so multi-run work needs one subprocess per run.
-- **Run directories use random hex suffixes and `mkdir(parents=True, exist_ok=True)`**: Single runs default to `<timestamp>_<method>_<robot>_<route>_<hex4>` to avoid collisions even within the same second. The runner recorder allows `exist_ok=True` so that pre-created directories (e.g. prepared with `run_spec.json`) can be safely used.
+- **Run directories are never overwritten**: single runs default to `<timestamp>_<method>_<robot>_<route>_<hex4>` (unique even within one second). The recorder accepts an empty or spec-only directory (the orchestrator pre-creates it with `run_spec.json`) but raises `FileExistsError` if it already holds recorder output; `sweep --resume` and `runs rerun` clear the previous attempt explicitly first (`nav_arena.utils.run_dir`).
+- **Visualization settings are tri-state**: `VizCfg.follow_camera`/`goal_overlay` default to `None` ("auto", follow `gui`) and are resolved only by `VizCfg.resolved()`. Do not default them in a CLI handler: that is how `nav_arena run --gui` once lost the follow camera.
+- **`method_params` holds policy config fields only.** Viewer and scene knobs belong in `VizCfg`; `device`, `plan_hz` and `task` are policy config keys passed straight through.
 
 ---
 
