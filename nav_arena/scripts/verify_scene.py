@@ -48,11 +48,8 @@ from isaaclab.managers import ActionManager
 from isaaclab.scene import InteractiveScene
 from isaaclab.utils.configclass import configclass
 
-from nav_arena.embodiments import (
-    NOVA_CARTER_ACTION_CFG,
-    setup_ros2_clock,
-    setup_ros2_odometry,
-)
+from nav_arena.embodiments import NOVA_CARTER_ACTION_CFG
+from nav_arena.ros2 import build_ros2_omnigraph
 from nav_arena.scenes import create_interior_agent_scene_cfg
 
 
@@ -94,12 +91,10 @@ def run_verification():
         step_dt=sim.get_physics_dt(),
     )
 
-    # Initialize ROS 2 OmniGraphs before timeline playback
-    print("[INFO] Initializing ROS 2 Clock and Odometry OmniGraphs...")
-    setup_ros2_clock()
-    setup_ros2_odometry(
-        articulation_root="/World/envs/env_0/Robot/chassis_link",
-        chassis_prim="/World/envs/env_0/Robot/chassis_link",
+    # Initialize ROS 2 OmniGraph bridge before timeline playback
+    print("[INFO] Initializing ROS 2 OmniGraph bridge...")
+    build_ros2_omnigraph(
+        robot_prim_path="/World/envs/env_0/Robot/chassis_link",
     )
 
     # Reset simulator to initialize physics views and start playback

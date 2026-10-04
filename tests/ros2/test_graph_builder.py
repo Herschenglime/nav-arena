@@ -47,11 +47,96 @@ def test_build_ros2_omnigraph():
         "PublishClock",
         "ComputeOdom",
         "PublishOdom",
-        "PublishTF",
+        "PublishRawTF",
     ]
     for name in node_names:
         node = og.Controller.node(f"{graph_path}/{name}")
         assert node.is_valid(), f"Node {name} was not found or is invalid in graph {graph_path}."
+
+    # Verify chassis prim relationship
+    odom_prim = stage.GetPrimAtPath(f"{graph_path}/ComputeOdom")
+    assert odom_prim.IsValid()
+    rel = odom_prim.GetRelationship("inputs:chassisPrim")
+    assert rel.IsValid()
+    assert rel.GetTargets() == [robot_prim_path]
+
+    # Verify modular graph: clock only
+    clock_graph_path = "/ActionGraph/ClockOnly"
+    clock_graph = build_ros2_omnigraph(
+        graph_path=clock_graph_path,
+        enable_clock=True,
+        enable_odom=False,
+        enable_tf=False,
+    )
+    assert clock_graph is not None and clock_graph.is_valid()
+    assert og.Controller.node(f"{clock_graph_path}/PublishClock").is_valid()
+    try:
+        assert not og.Controller.node(f"{clock_graph_path}/ComputeOdom").is_valid()
+    except og.OmniGraphValueError:
+        pass  # Expected: node does not exist
+
+    # Verify modular graph: odom only
+    odom_graph_path = "/ActionGraph/OdomOnly"
+    odom_graph = build_ros2_omnigraph(
+        robot_prim_path=robot_prim_path,
+        graph_path=odom_graph_path,
+        enable_clock=False,
+        enable_odom=True,
+        enable_tf=False,
+    )
+    assert odom_graph is not None and odom_graph.is_valid()
+    assert og.Controller.node(f"{odom_graph_path}/PublishOdom").is_valid()
+    try:
+        assert not og.Controller.node(f"{odom_graph_path}/PublishClock").is_valid()
+    except og.OmniGraphValueError:
+        pass  # Expected: node does not exist
+    try:
+        assert not og.Controller.node(f"{odom_graph_path}/PublishRawTF").is_valid()
+    except og.OmniGraphValueError:
+        pass  # Expected: node does not exist
+
+    # Verify modular graph: tf only
+    tf_graph_path = "/ActionGraph/TFOnly"
+    tf_graph = build_ros2_omnigraph(
+        robot_prim_path=robot_prim_path,
+        graph_path=tf_graph_path,
+        enable_clock=False,
+        enable_odom=False,
+        enable_tf=True,
+    )
+    assert tf_graph is not None and tf_graph.is_valid()
+    assert og.Controller.node(f"{tf_graph_path}/PublishRawTF").is_valid()
+    assert og.Controller.node(f"{tf_graph_path}/ComputeOdom").is_valid()
+    try:
+        assert not og.Controller.node(f"{tf_graph_path}/PublishClock").is_valid()
+    except og.OmniGraphValueError:
+        pass
+    try:
+        assert not og.Controller.node(f"{tf_graph_path}/PublishOdom").is_valid()
+    except og.OmniGraphValueError:
+        pass
+
+    # Verify input validation errors
+    try:
+        build_ros2_omnigraph(
+            robot_prim_path=None,
+            graph_path="/ActionGraph/InvalidOdom",
+            enable_odom=True,
+        )
+        assert False, "Expected ValueError when enable_odom=True without robot_prim_path"
+    except ValueError:
+        pass
+
+    try:
+        build_ros2_omnigraph(
+            graph_path="/ActionGraph/InvalidEmpty",
+            enable_clock=False,
+            enable_odom=False,
+            enable_tf=False,
+        )
+        assert False, "Expected ValueError when all flags are False"
+    except ValueError:
+        pass
 
     # Run a few simulation steps to verify graph execution without errors
     for _ in range(10):

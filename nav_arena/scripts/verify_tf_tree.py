@@ -50,9 +50,8 @@ from isaaclab.utils.configclass import configclass
 from nav_arena.embodiments import (
     NOVA_CARTER_CFG,
     NovaCarterEmbodimentCfg,
-    setup_ros2_clock,
-    setup_ros2_odometry,
 )
+from nav_arena.ros2 import build_ros2_omnigraph
 
 
 @configclass
@@ -103,13 +102,11 @@ def run_tf_verification():
     scene_cfg = TFVerifySceneCfg(num_envs=1, env_spacing=2.0)
     scene = InteractiveScene(scene_cfg)
 
-    # 6. Initialize ROS 2 OmniGraphs (Clock and Odometry)
-    print("[INFO] Constructing ROS 2 Clock and Odometry OmniGraphs...")
-    setup_ros2_clock()
-    setup_ros2_odometry(
-        articulation_root="/World/envs/env_0/Robot/chassis_link",
-        chassis_prim="/World/envs/env_0/Robot/chassis_link",
-        chassis_frame_id=embodiment_cfg.base_frame,
+    # 6. Initialize ROS 2 OmniGraph Bridge (Clock, Odometry, and TF)
+    print("[INFO] Constructing ROS 2 OmniGraph Bridge...")
+    build_ros2_omnigraph(
+        robot_prim_path="/World/envs/env_0/Robot/chassis_link",
+        base_frame=embodiment_cfg.base_frame,
     )
 
     # Reset simulation to start physics

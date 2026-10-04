@@ -55,9 +55,8 @@ from nav_arena.embodiments import (
     NOVA_CARTER_ACTION_CFG,
     NOVA_CARTER_CFG,
     create_2d_lidar_cfg,
-    setup_ros2_clock,
-    setup_ros2_odometry,
 )
+from nav_arena.ros2 import build_ros2_omnigraph
 
 
 @configclass
@@ -113,12 +112,10 @@ def run_verification():
         step_dt=sim.get_physics_dt(),
     )
 
-    # Initialize ROS 2 OmniGraphs before starting simulation timeline
-    print("[INFO] Initializing ROS 2 Clock and Odometry OmniGraphs...")
-    setup_ros2_clock()
-    setup_ros2_odometry(
-        articulation_root="/World/envs/env_0/Robot/chassis_link",
-        chassis_prim="/World/envs/env_0/Robot/chassis_link",
+    # Initialize ROS 2 OmniGraph bridge before starting simulation timeline
+    print("[INFO] Initializing ROS 2 OmniGraph bridge...")
+    build_ros2_omnigraph(
+        robot_prim_path="/World/envs/env_0/Robot/chassis_link",
     )
 
 
