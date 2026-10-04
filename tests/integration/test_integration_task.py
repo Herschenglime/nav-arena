@@ -23,7 +23,8 @@ def test_integration_task():
         script_path,
         "--headless",
         "--num-steps",
-        "30",
+        # Reaching the 1.5 m goal at 0.6 m/s takes ~110 steps; 30 steps can never satisfy the script's own check.
+        "150",
     ]
 
     result = subprocess.run(
@@ -31,7 +32,7 @@ def test_integration_task():
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
-        timeout=120,
+        timeout=300,
         cwd=sim_root,
     )
 

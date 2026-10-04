@@ -7,6 +7,7 @@
 
 from .base import InProcessPolicy, InProcessPolicyCfg, Plan, PolicyObservation
 from .controller import FollowerCfg, body_to_world, follow_path, goal_body_input, world_to_body
+from .runner import EpisodeCfg, EpisodeResult, run_episode
 from .registry import get_policy, list_policies, register_default_policies, register_policy
 
 __all__ = [
@@ -14,6 +15,9 @@ __all__ = [
     "InProcessPolicyCfg",
     "Plan",
     "PolicyObservation",
+    "EpisodeCfg",
+    "EpisodeResult",
+    "run_episode",
     "FollowerCfg",
     "follow_path",
     "world_to_body",

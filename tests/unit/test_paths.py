@@ -20,6 +20,7 @@ _PATH_ENV_VARS = (
     "NAV_ARENA_DATA_DIR",
     "NAV_ARENA_CACHE_DIR",
     "NAV_ARENA_LOG_DIR",
+    "NAV_ARENA_RUNS_DIR",
     "NAV_ARENA_NAVDP_ROOT",
 )
 
@@ -52,6 +53,7 @@ def test_defaults_are_workspace_relative(reload_paths):
     assert p.DATA_DIR == p.WORKSPACE_ROOT / "data"
     assert p.CACHE_DIR == p.PROJECT_ROOT / "cache"
     assert p.LOG_DIR == p.WORKSPACE_ROOT
+    assert p.RUNS_DIR == p.CACHE_DIR / "runs"
     assert p.NAVDP_ROOT == p.WORKSPACE_ROOT / "NavDP"
 
 

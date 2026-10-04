@@ -9,7 +9,27 @@ Plan of record: `~/.claude/plans/1-it-s-fine-to-goofy-gizmo.md` (supersedes
 
 ## Needs your review
 
-_(none yet)_
+1. **Pre-existing bug fixed in `nav_arena.core.launch_simulation_app`.** `SimulationApp.close()` ends the process, and
+   the manager never passed an exit code, so *every* failure inside the `with` block exited 0 (and exceptions never
+   reached the script's `except`). Consequence: `test_integration_task` had been passing hollowly: it ran `verify_task.py
+   --num-steps 30` but reaching the goal takes ~108 steps, so its own assertion failed unnoticed. I fixed the manager
+   (nonzero status for exceptions, `sys.exit(n)` honored, traceback logged) and the test (150 steps). Other scripts keep
+   their now-dead outer `except` blocks. Please sanity-check this against how you run scripts interactively.
+2. **Routes need your eyes in the GUI.** Chosen from the occupancy map; start/goal have >= 0.5 m clearance and A* paths
+   exist, but I only checked them headless. My first `hall_straight` clipped a wall corner (spawn 0.08 m from a wall
+   face; the Dingo's corner poked into it), so it was replaced by a segment with >= 0.8 m clearance along its whole
+   length. `through_doorway` passes a ~1 m opening and is hard for any method.
+   `python -u nav_arena/nav_arena/scripts/verify_baseline.py --method iplanner --route <name> --viz kit`
+3. **`verify_nav2.py` was not re-run by me** (full ROS 2 + Nav2 stack; on your list). Verified instead: the relocated
+   launch file builds, the TF-tree integration test (uses the moved `robot_description.launch.py`) and the L2 ROS tests
+   pass.
+4. **Baseline behavior vs. expectations (see results table).** iPlanner/VIPlanner *stop and never resume* when predicted
+   fear >= 0.7 (the labmate's design, kept as-is); in `around_table`/`through_doorway` iPlanner halts at the first plan.
+   NavDP often ends 0.4-0.5 m short of a 0.4 m goal tolerance (his own recorded run did the same); `--goal-dist 0.5`
+   would count it. Do you want a recovery behavior (e.g. rotate in place when stopped) or looser tolerance as defaults?
+5. **Unpushed work:** nav_arena commits on `feat/navdp-baselines` are local. NavDP fork is pinned at `8b9ee13` (pushed by
+   you).
+6. Delete this log (and decide whether to keep `requirements/baselines-mmcv.md`) before merging.
 
 ## Decisions made (with rationale)
 
@@ -41,7 +61,7 @@ _(none yet)_
 - [x] Phase 2 — RGB-D camera + multi-robot verify_embodiment (headless run: Dingo+camera PASS, Carter PASS)
 - [x] Phase 3 — methods restructure + NavDP adapter port (129 unit tests; real-model smoke tests on all five)
 - [x] Phase 4 — generalized PointNavTask (headless: Carter + Dingo/camera PASS; 3 existing integration tests PASS)
-- [ ] Phase 5 — episode runner, verify_baseline, Dingo integration test
+- [x] Phase 5 — episode runner, verify_baseline, routes, Dingo integration tests (6/6 integration, 169 unit tests pass)
 
 ## Findings / surprises
 
@@ -73,3 +93,23 @@ _(none yet)_
 - **Phase 4 / `verify_nav2.py` not re-run:** it needs the full ROS 2 + Nav2 stack and is on your list. What I did verify:
   the relocated `nav2.launch.py` builds its launch description with the new relative config paths, and the
   `test_integration_tf_tree` test (which uses the moved `robot_description.launch.py`) passes.
+
+- **Phase 5 / results matrix** (Dingo unless noted; kujiale_0003 open doors; 30 s budget; goal tolerance 0.4 m; follower
+  max 0.3 m/s; headless; seed 0):
+
+  | Method | hall_straight | around_table | through_doorway |
+  |---|---|---|---|
+  | iPlanner | goal, 18.9 s | max_steps (stopped by fear at plan 1) | max_steps (stopped by fear at plan 1) |
+  | NavDP | max_steps, 0.47 m short | collision (2.2 m driven) | collision (1.8 m driven) |
+  | X-NavDP | goal, 19.0 s | collision (3.3 m driven) | goal, 12.4 s |
+  | ViNT (image goal) | collision at 3.6 m | not run | not run |
+  | VIPlanner | max_steps, 2.6 m left (89/150 stop requests) | not run | not run |
+  | iPlanner on Nova Carter | goal, 19.0 s | - | - |
+
+  Collisions were checked against the occupancy map: each had a footprint point at 0.0-0.1 m from an obstacle (table
+  edge, door frame), i.e. genuine contacts, not detector artifacts. Inference per plan: iPlanner ~8 ms, ViNT 28 ms,
+  VIPlanner 151 ms, NavDP 151-177 ms, X-NavDP 219-281 ms (GB10).
+- **Phase 5 / flaky Kit startup crash (seen once):** a boot-time SIGSEGV in `libcarb.tasking.plugin.so`
+  (exit 139, 13 ms into startup) in one run of a scratch script; 4 immediate repeats were fine. Not related to these changes.
+- **Phase 5 / planning cadence:** the runner calls `task.refresh_camera_frame()` (render + read) at each plan instead of
+  relying on `render_interval` phase alignment, so ViNT's 3 Hz (33-step period) works with the 5 Hz render cadence.

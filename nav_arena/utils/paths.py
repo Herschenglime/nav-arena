@@ -54,6 +54,9 @@ DATA_DIR = resolve_path("NAV_ARENA_DATA_DIR", WORKSPACE_ROOT / "data")
 CACHE_DIR = resolve_path("NAV_ARENA_CACHE_DIR", PROJECT_ROOT / "cache")
 """Generated runtime caches (git-ignored): conditioned scenes, occupancy maps."""
 
+RUNS_DIR = resolve_path("NAV_ARENA_RUNS_DIR", CACHE_DIR / "runs")
+"""Per-episode run artifacts (settings, per-plan logs, snapshots, summaries) written by the baseline runner."""
+
 LOG_DIR = resolve_path("NAV_ARENA_LOG_DIR", WORKSPACE_ROOT)
 """Destination for external process logs (e.g. Nav2 bringup)."""
 

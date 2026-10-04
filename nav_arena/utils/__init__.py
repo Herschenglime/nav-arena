@@ -21,6 +21,7 @@ from nav_arena.utils.paths import (
     NAVDP_ROOT,
     PACKAGE_ROOT,
     PROJECT_ROOT,
+    RUNS_DIR,
     WORKSPACE_ROOT,
     resolve_path,
 )
@@ -44,6 +45,7 @@ __all__ = [
     "CACHE_DIR",
     "LOG_DIR",
     "NAVDP_ROOT",
+    "RUNS_DIR",
     "create_mock_env",
 ]
 

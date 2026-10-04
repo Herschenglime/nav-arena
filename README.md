@@ -100,6 +100,30 @@ python -u nav_arena/nav_arena/scripts/verify_embodiment.py
 python -u nav_arena/nav_arena/scripts/verify_embodiment.py --robot dingo --camera
 ```
 
+### Learned Baseline Evaluation
+Runs one in-process navigation baseline (`iplanner`, `vint`, `navdp`, `viplanner`, `x_navdp`) closed-loop on a PointNav route, then reports time-to-goal, distance remaining, and the terminal cause (`goal_reached`, `collision`, `tipped`, `time_out`, or `max_steps`). It exits 0 only when the goal is reached (2 otherwise, 1 on errors). Setup: see [Learned Baseline Setup](#learned-baseline-setup-navdp-family).
+```bash
+source setup.env
+
+# iPlanner on the Clearpath Dingo, straight run across the hall (headless)
+python -u nav_arena/nav_arena/scripts/verify_baseline.py --method iplanner --robot dingo --route hall_straight
+
+# NavDP around the dining table, with the interactive Kit GUI
+python -u nav_arena/nav_arena/scripts/verify_baseline.py --method navdp --route around_table --viz kit
+
+# Custom spawn/goal, other robot, other policy settings
+python -u nav_arena/nav_arena/scripts/verify_baseline.py --method x_navdp --robot nova_carter \
+    --spawn -6.4 0.5 --goal -0.4 0.5 --goal-dist 0.5 --policy-arg fear_threshold=0.5
+```
+Each run writes `settings.json`, per-plan `steps.jsonl`, `summary.json`, and periodic RGB/depth snapshots to `cache/runs/<timestamp>_<method>_<robot>_<route>/` (override with `--output` or `NAV_ARENA_RUNS_DIR`). Routes for `kujiale_0003` are defined in [`scenes/routes.py`](file:///home/robopi/simulation/nav_arena/nav_arena/scenes/routes.py):
+
+| Route | Character |
+|---|---|
+| `hall_straight` | 6 m straight run across the open hall (>= 0.8 m clearance) |
+| `around_table` | goal directly behind the dining table (~1.4x detour) |
+| `through_doorway` | exits the hall through a ~1 m wall opening |
+| `to_far_room` | 10 m diagonal between furniture |
+
 ### Scene Verification (InteriorAgent)
 Loads an InteriorAgent USD scene, settles the robot on floor geometry, drives forward, and verifies 360° LiDAR raycasting:
 ```bash
@@ -163,9 +187,9 @@ The test suite is organized into three distinct verification tiers:
 
 | Tier | Directory | Description | Typical Runtime | Target Environment |
 |---|---|---|---|---|
-| **L1: Unit Tests** | [`tests/unit/`](file:///home/robopi/simulation/nav_arena/tests/unit/) | Fast, CPU-only algorithmic & component tests (kinematics, LaserScan math, logger, process management, scene resolution, URDF synthesis, embodiment registry, sensor configs, paths, in-process policy adapters and path follower). | ~5 seconds (129 tests) | Pure Python / CPU |
+| **L1: Unit Tests** | [`tests/unit/`](file:///home/robopi/simulation/nav_arena/tests/unit/) | Fast, CPU-only algorithmic & component tests (kinematics, LaserScan math, logger, process management, scene resolution, URDF synthesis, embodiment registry, sensor configs, paths, in-process policy adapters and path follower). | ~6 seconds (169 tests) | Pure Python / CPU |
 | **L2: ROS 2 Tests** | [`tests/ros2/`](file:///home/robopi/simulation/nav_arena/tests/ros2/) | Subprocess & ROS 2 middleware tests (Action adapters, OmniGraph builders, state publisher QoS, closed-loop driving). Marked with `@pytest.mark.ros2`. | ~30 seconds (4 tests) | ROS 2 Jazzy & Subprocess |
-| **L3: Simulation Tests** | [`tests/integration/`](file:///home/robopi/simulation/nav_arena/tests/integration/) | In-process Isaac Sim tests (occupancy grid generation, full `PointNavTask` stepping and resets, TF tree continuity). Marked with `@pytest.mark.integration`. | ~26 seconds (3 tests) | GPU / Isaac Sim PhysX |
+| **L3: Simulation Tests** | [`tests/integration/`](file:///home/robopi/simulation/nav_arena/tests/integration/) | Isaac Sim tests run as headless subprocesses (occupancy grid generation, full `PointNavTask` stepping and resets, TF tree continuity, Dingo embodiment/camera/collision checks, and a full iPlanner episode). Marked with `@pytest.mark.integration`. | ~95 seconds (6 tests) | GPU / Isaac Sim PhysX |
 
 ### Running Tests
 
@@ -230,6 +254,7 @@ nav_arena/
 │   │   │   ├── base.py                # InProcessPolicy contract, PolicyObservation, Plan
 │   │   │   ├── controller.py          # Frame transforms and shared lookahead path follower
 │   │   │   ├── registry.py            # get_policy / list_policies / register_policy
+│   │   │   ├── runner.py              # run_episode: closed-loop planning + path following, metrics, run recording
 │   │   │   └── navdp_adapter/         # iPlanner, ViNT, NavDP, VIPlanner, X-NavDP adapters over NavDP
 │   │   └── ros2/
 │   │       └── nav2/                  # Nav2 bringup launch scripts, parameters, URDF bridge
@@ -240,7 +265,8 @@ nav_arena/
 │   │   ├── sensors.py                 # LaserScanPublisherNode (360° RayCaster to /scan)
 │   │   └── state_publisher.py         # TaskStatePublisherNode (static TF, /goal_pose, /goal_reached)
 │   ├── scenes/                        # USD loaders and delta layer conditioning (InteriorAgent)
-│   │   └── interior_agent.py          # USD scene loader, delta layer conditioning, BVH preprocessor
+│   │   ├── interior_agent.py          # USD scene loader, delta layer conditioning, BVH preprocessor
+│   │   └── routes.py                  # Named start/goal routes per scene
 │   ├── tasks/                         # PointNavTask (ManagerBasedRLEnv), MDP terms, metrics
 │   │   └── point_nav.py               # PointNavTask environment & MDP configuration
 │   ├── tools/                         # Offline utilities (CLI 2D map generator)
@@ -254,7 +280,8 @@ nav_arena/
 │       ├── run_ros2_nav.py            # Main execution orchestrator for ROS 2 bridge
 │       ├── verify_embodiment.py       # Validates robot kinematics and 2D LiDAR ranges
 │       ├── verify_scene.py            # Validates scene loading and sensor raycasting
-│       ├── verify_task.py             # Validates PointNavTask MDP metrics and resets
+│       ├── verify_task.py             # Validates PointNavTask MDP metrics, resets, and (--camera) sensors
+│       ├── verify_baseline.py         # Runs a learned baseline closed-loop and reports TTG / distance / cause
 │       ├── verify_occupancy_map.py    # Generates and validates 2D occupancy maps
 │       ├── verify_tf_tree.py          # Validates robot_state_publisher and complete TF tree
 │       └── verify_nav2.py             # End-to-end Nav2 autonomous navigation benchmark

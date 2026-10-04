@@ -454,6 +454,21 @@ class PointNavTask(ManagerBasedRLEnv):
         depth = _to_tensor(output["distance_to_image_plane"])[env_idx, :, :, 0].cpu().numpy().astype(np.float32)
         return rgb, depth
 
+    def refresh_camera_frame(self, env_idx: int = 0, render_frames: int = 1) -> tuple[np.ndarray, np.ndarray]:
+        """Render now and return the freshest RGB-D frame, independent of ``render_interval`` phase.
+
+        Planners that run at a few Hz call this at planning time so their input is never stale, while the physics
+        loop keeps rendering at the (cheaper) ``render_interval`` cadence in between.
+
+        Returns:
+            ``(rgb, depth)`` as in :meth:`get_camera_frame`.
+        """
+        camera = self._get_camera("camera")
+        for _ in range(render_frames):
+            self.sim.render()
+        camera.update(self.step_dt, force_recompute=True)
+        return self.get_camera_frame(env_idx)
+
     def render_goal_image(
         self,
         goal_xy: Sequence[float],

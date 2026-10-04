@@ -17,8 +17,14 @@ from .interior_agent import (
     prepare_interior_agent_stage,
     resolve_interior_agent_usd,
 )
+from .routes import DEFAULT_ROUTE, INTERIOR_AGENT_ROUTES, Route, get_route, list_routes
 
 __all__ = [
+    "DEFAULT_ROUTE",
+    "INTERIOR_AGENT_ROUTES",
+    "Route",
+    "get_route",
+    "list_routes",
     "DEFAULT_INTERIOR_AGENT_CACHE_DIR",
     "DEFAULT_INTERIOR_AGENT_DIR",
     "DEFAULT_INTERIOR_AGENT_SCENE_ID",
