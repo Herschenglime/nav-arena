@@ -25,7 +25,6 @@ from nav_arena.benchmarks.session import (
 )
 from nav_arena.benchmarks.spec import EpisodeLimits, RunSpec, VizCfg
 from nav_arena.benchmarks.worker import (
-    inject_nav2_boot_flags,
     load_run_spec,
     main as worker_main,
 )
@@ -253,18 +252,6 @@ def test_worker_load_run_spec_validation_failure():
     bad_spec = {"method": "invalid_method_xyz", "robot": "dingo", "scene": "kujiale_0003"}
     with pytest.raises(ValueError, match="Invalid method"):
         load_run_spec(json.dumps(bad_spec))
-
-
-def test_worker_inject_nav2_boot_flags():
-    original_argv = list(sys.argv)
-    try:
-        sys.argv = ["worker.py"]
-        inject_nav2_boot_flags()
-        assert "--enable" in sys.argv
-        assert "omni.graph" in sys.argv
-        assert "isaacsim.ros2.bridge" in sys.argv
-    finally:
-        sys.argv = original_argv
 
 
 def test_worker_exit_code_goal_reached(tmp_path):

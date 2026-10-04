@@ -18,32 +18,6 @@ from nav_arena.utils import add_logger_args, configure_logging, get_logger
 logger = get_logger("benchmarks.worker")
 
 
-def inject_nav2_boot_flags() -> None:
-    """Inject OmniGraph and ROS 2 bridge boot flags into sys.argv if not present."""
-    flags = [
-        "--enable", "omni.graph",
-        "--enable", "omni.graph.action",
-        "--enable", "isaacsim.ros2.bridge",
-        "--enable", "isaacsim.ros2.nodes",
-    ]
-    i = 0
-    while i < len(flags):
-        flag = flags[i]
-        if flag == "--enable" and i + 1 < len(flags):
-            ext_name = flags[i + 1]
-            already_present = any(
-                sys.argv[j] == "--enable" and j + 1 < len(sys.argv) and sys.argv[j + 1] == ext_name
-                for j in range(len(sys.argv))
-            )
-            if not already_present:
-                sys.argv.extend(["--enable", ext_name])
-            i += 2
-        else:
-            if flag not in sys.argv:
-                sys.argv.append(flag)
-            i += 1
-
-
 def load_run_spec(spec_input: str) -> RunSpec:
     """Parse and validate a RunSpec from a JSON file path or raw JSON string.
 
@@ -78,46 +52,21 @@ def load_run_spec(spec_input: str) -> RunSpec:
     return spec
 
 
-def parse_worker_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, list[str]]:
-    """Parse CLI arguments for the benchmark worker process."""
-    parser = argparse.ArgumentParser(
-        description="Worker subprocess executing one isolated navigation episode."
-    )
+def parse_worker_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse the worker command line: the spec, logging flags, and the Isaac Lab app launcher flags."""
+    from isaaclab.app import AppLauncher  # safe before boot; the app itself starts later in RunSession
+
+    parser = argparse.ArgumentParser(description="Worker subprocess executing one isolated navigation episode.")
     parser.add_argument("spec", help="Path to RunSpec JSON file or raw JSON string.")
     add_logger_args(parser)
-    return parser.parse_known_args(argv)
-
-
-def _merge_remaining_args(args: argparse.Namespace, remaining: list[str]) -> argparse.Namespace:
-    """Parse extra command-line flags (e.g. AppLauncher options) onto the namespace."""
-    i = 0
-    while i < len(remaining):
-        arg = remaining[i]
-        if arg.startswith("--"):
-            key_val = arg[2:].split("=", 1)
-            key = key_val[0].replace("-", "_")
-            if len(key_val) == 2:
-                val = key_val[1]
-                i += 1
-            elif i + 1 < len(remaining) and not remaining[i + 1].startswith("-"):
-                val = remaining[i + 1]
-                i += 2
-            else:
-                val = True
-                i += 1
-            setattr(args, key, val)
-        else:
-            i += 1
-    return args
+    AppLauncher.add_app_launcher_args(parser)
+    return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> None:
     """Main worker entry point."""
-    args, remaining = parse_worker_args(argv)
-    if remaining:
-        _merge_remaining_args(args, remaining)
-
-    if hasattr(args, "log_level") and args.log_level:
+    args = parse_worker_args(argv)
+    if args.log_level:
         configure_logging(args.log_level)
 
     try:
@@ -126,10 +75,7 @@ def main(argv: list[str] | None = None) -> None:
         logger.error(f"Spec parsing error: {exc}", exc_info=True)
         sys.exit(1)
 
-    if spec.method == "nav2" or spec.method_family == "ros2":
-        inject_nav2_boot_flags()
-
-    # Pass args to RunSession / AppLauncher (including any additional CLI flags)
+    # RunSession passes enable_ros2 for the ros2 family to launch_simulation_app, which injects the boot flags.
     try:
         with RunSession(spec, args_cli=args) as session:
             result = session.run_episode()
