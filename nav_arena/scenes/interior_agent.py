@@ -21,15 +21,16 @@ from nav_arena.embodiments import (
     NOVA_CARTER_CFG,
     create_2d_lidar_cfg,
 )
+from nav_arena.utils.paths import CACHE_DIR, DATA_DIR
 
-DEFAULT_INTERIOR_AGENT_DIR = "/home/robopi/simulation/data/InteriorAgent"
+DEFAULT_INTERIOR_AGENT_DIR = str(DATA_DIR / "InteriorAgent")
 DEFAULT_INTERIOR_AGENT_SCENE_ID = "kujiale_0003"
 DEFAULT_INTERIOR_AGENT_USD = os.path.join(
     DEFAULT_INTERIOR_AGENT_DIR,
     DEFAULT_INTERIOR_AGENT_SCENE_ID,
     f"{DEFAULT_INTERIOR_AGENT_SCENE_ID}.usda",
 )
-DEFAULT_INTERIOR_AGENT_CACHE_DIR = "/home/robopi/simulation/nav_arena/cache/scenes"
+DEFAULT_INTERIOR_AGENT_CACHE_DIR = str(CACHE_DIR / "scenes")
 
 INTERIOR_AGENT_DOOR_PREFIX = "other/door_"
 

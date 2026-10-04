@@ -16,7 +16,9 @@ import numpy as np
 from PIL import Image
 import yaml
 
-from nav_arena.utils import add_logger_args, configure_logging, get_logger
+from nav_arena.utils import CACHE_DIR, add_logger_args, configure_logging, get_logger
+
+DEFAULT_MAP_CACHE_DIR = str(CACHE_DIR / "maps")
 
 logger = get_logger("map_generator")
 
@@ -185,7 +187,7 @@ def generate_occupancy_map(
     cell_size: float = DEFAULT_CELL_SIZE,
     z_min: float = DEFAULT_Z_MIN,
     z_max: float = DEFAULT_Z_MAX,
-    output_dir: str = "nav_arena/cache/maps/default",
+    output_dir: str = os.path.join(DEFAULT_MAP_CACHE_DIR, "default"),
     warmup_steps: int = 30,
     stage_preprocessor: Callable[[Usd.Stage], None] | None = None,
 ) -> str:
@@ -326,7 +328,7 @@ def get_occupancy_map(
     cell_size: float = DEFAULT_CELL_SIZE,
     z_min: float = DEFAULT_Z_MIN,
     z_max: float = DEFAULT_Z_MAX,
-    cache_root: str = "nav_arena/cache/maps",
+    cache_root: str = DEFAULT_MAP_CACHE_DIR,
     output_dir: str | None = None,
     force_generate: bool = False,
     warmup_steps: int = 30,
@@ -412,13 +414,13 @@ def main():
         "--output-dir",
         type=str,
         default=None,
-        help="Custom output directory to save map.yaml and map.png (defaults to nav_arena/cache/maps/<scene_id>/<cache_key>).",
+        help="Custom output directory to save map.yaml and map.png (defaults to <cache-root>/<scene_id>/<cache_key>).",
     )
     parser.add_argument(
         "--cache-root",
         type=str,
-        default="nav_arena/cache/maps",
-        help="Base cache directory when --output-dir is not specified (default: nav_arena/cache/maps).",
+        default=DEFAULT_MAP_CACHE_DIR,
+        help="Base cache directory when --output-dir is not specified (default: nav_arena/cache/maps, or $NAV_ARENA_CACHE_DIR/maps).",
     )
     parser.add_argument(
         "--bounds-prim",

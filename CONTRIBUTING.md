@@ -17,7 +17,7 @@ nav_arena/
 ├── methods/      # Autonomy baselines and upstream stack configs (Nav2 parameters and bringup)
 ├── ros2/         # ROS 2 middleware bridges (OmniGraph builders, action adapters, async publisher nodes)
 ├── tools/        # Standalone offline utilities (CLI 2D occupancy grid generator)
-├── utils/        # Cross-cutting primitives (ArenaLogger, managed_process, create_mock_env)
+├── utils/        # Cross-cutting primitives (ArenaLogger, managed_process, paths, create_mock_env)
 ├── scripts/      # Thin executable runners and verifiers (NO domain logic definitions)
 └── tests/        # 3-tier verification suite (unit/, ros2/, integration/)
 ```
@@ -33,7 +33,8 @@ nav_arena/
 - **`nav_arena.methods`**: Autonomy algorithms and baselines. Nav2 bringup, launch files, parameter YAMLs, and alternative planning methods belong here.
 - **`nav_arena.ros2`**: The boundary between Isaac Sim and ROS 2 middleware. Contains OmniGraph generators ([`graph_builder.py`](file:///home/robopi/simulation/nav_arena/nav_arena/ros2/graph_builder.py)), action adapters ([`action_adapter.py`](file:///home/robopi/simulation/nav_arena/nav_arena/ros2/adapters/action_adapter.py)), and publisher nodes ([`sensors.py`](file:///home/robopi/simulation/nav_arena/nav_arena/ros2/sensors.py), [`state_publisher.py`](file:///home/robopi/simulation/nav_arena/nav_arena/ros2/state_publisher.py)).
 - **`nav_arena.tools`**: Offline CLI utilities (e.g. [`map_generator.py`](file:///home/robopi/simulation/nav_arena/nav_arena/tools/map_generator.py)). Utilities should be self-contained and callable via `python -m nav_arena.tools.<tool_name>`.
-- **`nav_arena.utils`**: Shared developer infrastructure ([`logger.py`](file:///home/robopi/simulation/nav_arena/nav_arena/utils/logger.py), [`process.py`](file:///home/robopi/simulation/nav_arena/nav_arena/utils/process.py), [`sim.py`](file:///home/robopi/simulation/nav_arena/nav_arena/utils/sim.py)).
+- **`nav_arena.utils`**: Shared developer infrastructure ([`logger.py`](file:///home/robopi/simulation/nav_arena/nav_arena/utils/logger.py), [`process.py`](file:///home/robopi/simulation/nav_arena/nav_arena/utils/process.py), [`paths.py`](file:///home/robopi/simulation/nav_arena/nav_arena/utils/paths.py), [`sim.py`](file:///home/robopi/simulation/nav_arena/nav_arena/utils/sim.py)).
+  - **Filesystem paths**: Never hardcode absolute paths. Derive asset, dataset, cache, and log locations from [`nav_arena.utils.paths`](file:///home/robopi/simulation/nav_arena/nav_arena/utils/paths.py) (`WORKSPACE_ROOT`, `DATA_DIR`, `CACHE_DIR`, `LOG_DIR`, `NAVDP_ROOT`), each overridable via a `NAV_ARENA_*` environment variable. Add new locations there with `resolve_path()`.
 - **`nav_arena.scripts`**: Thin CLI entrypoints ([`verify_*.py`](file:///home/robopi/simulation/nav_arena/nav_arena/scripts/), [`run_ros2_nav.py`](file:///home/robopi/simulation/nav_arena/nav_arena/scripts/run_ros2_nav.py)). Scripts must only configure arguments, instantiate modular components, and orchestrate execution.
 
 ---

@@ -8,20 +8,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-import os
 from typing import Any, Callable
 
 import isaaclab.sim as sim_utils
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets.articulation import ArticulationCfg
 
+from nav_arena.utils.paths import NAVDP_ROOT, resolve_path
+
 from .actions import DifferentialDriveActionCfg
 from .base import RobotEmbodimentCfg
 from .registry import register_embodiment
 
-# Resolve Dingo USD path: prioritize simulation workspace / NavDP
-_DEFAULT_DINGO_USD = "/home/robopi/simulation/NavDP/assets/robots/dingo.usd"
-DINGO_USD_PATH = os.environ.get("NAV_ARENA_DINGO_USD", _DEFAULT_DINGO_USD)
+# Full-scale Dingo asset shipped with NavDP; override with NAV_ARENA_DINGO_USD.
+DINGO_USD_PATH = str(resolve_path("NAV_ARENA_DINGO_USD", NAVDP_ROOT / "assets/robots/dingo.usd"))
 
 
 ##
