@@ -28,6 +28,7 @@ from nav_arena.benchmarks.spec import (
     validate_spec,
 )
 from nav_arena.benchmarks.sweep import check_preflight_processes
+from nav_arena.cli._common import CliError
 from nav_arena.utils.logger import get_logger
 from nav_arena.utils.paths import RUNS_DIR
 from nav_arena.utils.run_dir import recorded_artifacts
@@ -73,134 +74,129 @@ def load_spec_file(spec_path: Path | str) -> dict[str, Any]:
     return data
 
 
+_SPEC_ERRORS = (OSError, ValueError, KeyError, TypeError, yaml.YAMLError)
+"""Exceptions a malformed spec file or override value can raise."""
+
+_FLAG_OVERRIDES = (  # (argparse attribute, apply_overrides key)
+    ("method", "method"),
+    ("robot", "robot"),
+    ("scene", "scene"),
+    ("route", "route"),
+    ("spawn", "spawn"),
+    ("goal", "goal"),
+    ("spawn_yaw", "spawn_yaw"),
+    ("seed", "seed"),
+    ("max_steps", "max_steps"),
+    ("goal_dist", "goal_dist"),
+    ("max_speed", "max_speed"),
+    ("stall_timeout", "stall_timeout"),
+    ("gui", "gui"),
+    ("follow_camera", "follow_camera"),
+    ("goal_overlay", "goal_overlay"),
+    ("output", "output"),
+    ("policy_arg", "policy_arg"),
+)
+
+
+def refuse_if_simulator_busy(force: bool) -> bool:
+    """Log the conflicting processes and return True if another simulator is running (and ``force`` is not set)."""
+    if force:
+        return False
+    conflicts = check_preflight_processes()
+    if not conflicts:
+        return False
+    logger.error("Active simulation or verification processes detected:")
+    for pid, cmd in conflicts:
+        logger.error("  [PID %d] %s", pid, cmd)
+    logger.error("Refusing to start. Use --force to proceed anyway.")
+    return True
+
+
+def flag_overrides(args: argparse.Namespace) -> dict[str, Any]:
+    """The run flags the user explicitly gave, keyed for :func:`apply_overrides` (unset flags are absent)."""
+    overrides = {
+        key: getattr(args, attr)
+        for attr, key in _FLAG_OVERRIDES
+        if getattr(args, attr, None) not in (None, [])
+    }
+    # Choosing a custom start/goal on the command line replaces a spec file's named route, and vice versa.
+    if args.spawn is not None and args.goal is not None and args.route is None:
+        overrides["route"] = None
+    elif args.route is not None and args.spawn is None and args.goal is None:
+        overrides["spawn"] = overrides["goal"] = None
+    return overrides
+
+
+def _spec_from_file(args: argparse.Namespace) -> RunSpec:
+    try:
+        base = RunSpec.from_dict(load_spec_file(args.spec))
+    except _SPEC_ERRORS as exc:
+        raise CliError(f"Failed to load spec from '{args.spec}': {exc}") from exc
+    try:
+        return apply_overrides(base, flag_overrides(args), logger=logger)
+    except _SPEC_ERRORS as exc:
+        raise CliError(f"Failed to apply CLI overrides: {exc}") from exc
+
+
+def _spec_from_flags(args: argparse.Namespace) -> RunSpec:
+    if args.method is None:
+        raise CliError("Argument --method is required when --spec is not provided.")
+    try:
+        method_params = _parse_policy_args(args.policy_arg) if args.policy_arg else {}
+    except ValueError as exc:
+        raise CliError(f"Invalid --policy-arg: {exc}") from exc
+
+    def given(value: Any, default: Any) -> Any:
+        return default if value is None else value
+
+    return RunSpec(
+        method=args.method,
+        robot=given(args.robot, "dingo"),
+        scene=given(args.scene, "kujiale_0003"),
+        route=args.route,
+        spawn=tuple(args.spawn) if args.spawn is not None else None,
+        goal=tuple(args.goal) if args.goal is not None else None,
+        spawn_yaw=args.spawn_yaw,
+        seed=given(args.seed, 0),
+        method_params=method_params,
+        limits=EpisodeLimits.from_options(
+            {
+                "max_steps": args.max_steps,
+                "goal_dist": args.goal_dist,
+                "max_speed": args.max_speed,
+                "stall_timeout": args.stall_timeout,
+            }
+        ),
+        viz=VizCfg(gui=bool(args.gui), follow_camera=args.follow_camera, goal_overlay=args.goal_overlay),
+        output_dir=Path(args.output) if args.output is not None else None,
+    )
+
+
+def _resolve_run_dir(args: argparse.Namespace, spec: RunSpec) -> Path:
+    if args.output is not None:
+        return Path(args.output).resolve()
+    if spec.output_dir is not None:
+        return Path(spec.output_dir).resolve()
+    return generate_run_dir(spec)
+
+
 def handle_run(args: argparse.Namespace) -> int:
     """Execute the 'run' subcommand to run an isolated navigation episode."""
-    # 1. Pre-flight guard
-    if not args.force:
-        conflicts = check_preflight_processes()
-        if conflicts:
-            logger.error("Active simulation or verification processes detected:")
-            for pid, cmd in conflicts:
-                logger.error("  [PID %d] %s", pid, cmd)
-            logger.error("Refusing to start. Use --force to proceed anyway.")
-            return 1
-
-    # 2. Build or resolve RunSpec
-    if args.spec:
-        try:
-            raw_dict = load_spec_file(args.spec)
-            base_spec = RunSpec.from_dict(raw_dict)
-        except Exception as exc:
-            logger.error("Failed to load spec from '%s': %s", args.spec, exc)
-            return 1
-
-        # Extract explicitly provided CLI flags as overrides
-        overrides: dict[str, Any] = {}
-        if args.method is not None:
-            overrides["method"] = args.method
-        if args.robot is not None:
-            overrides["robot"] = args.robot
-        if args.scene is not None:
-            overrides["scene"] = args.scene
-        if args.route is not None:
-            overrides["route"] = args.route
-        if args.spawn is not None:
-            overrides["spawn"] = args.spawn
-        if args.goal is not None:
-            overrides["goal"] = args.goal
-        if args.spawn_yaw is not None:
-            overrides["spawn_yaw"] = args.spawn_yaw
-        if args.seed is not None:
-            overrides["seed"] = args.seed
-        if args.max_steps is not None:
-            overrides["max_steps"] = args.max_steps
-        if args.goal_dist is not None:
-            overrides["goal_dist"] = args.goal_dist
-        if args.max_speed is not None:
-            overrides["max_speed"] = args.max_speed
-        if args.stall_timeout is not None:
-            overrides["stall_timeout"] = args.stall_timeout
-        if args.gui is not None:
-            overrides["gui"] = args.gui
-        if args.follow_camera is not None:
-            overrides["follow_camera"] = args.follow_camera
-        if args.goal_overlay is not None:
-            overrides["goal_overlay"] = args.goal_overlay
-        if args.output is not None:
-            overrides["output"] = args.output
-        if args.policy_arg:
-            try:
-                overrides["policy_arg"] = args.policy_arg
-            except Exception as exc:
-                logger.error("Error parsing --policy-arg: %s", exc)
-                return 1
-
-        # If custom spawn & goal provided on CLI, clear route if route not explicitly given
-        if args.spawn is not None and args.goal is not None and args.route is None:
-            overrides["route"] = None
-        # If named route provided on CLI, clear custom coordinates if not explicitly given
-        elif args.route is not None and args.spawn is None and args.goal is None:
-            overrides["spawn"] = None
-            overrides["goal"] = None
-
-        try:
-            spec = apply_overrides(base_spec, overrides, logger=logger)
-        except Exception as exc:
-            logger.error("Failed to apply CLI overrides: %s", exc)
-            return 1
-    else:
-        if args.method is None:
-            logger.error("Argument --method is required when --spec is not provided.")
-            return 1
-
-        policy_args_dict: dict[str, Any] = {}
-        if args.policy_arg:
-            try:
-                policy_args_dict = _parse_policy_args(args.policy_arg)
-            except ValueError as exc:
-                logger.error("Invalid --policy-arg: %s", exc)
-                return 1
-
-        limits = EpisodeLimits(
-            max_steps=args.max_steps if args.max_steps is not None else 1500,
-            goal_tolerance=args.goal_dist if args.goal_dist is not None else 0.4,
-            max_speed=args.max_speed if args.max_speed is not None else 0.3,
-            stall_timeout_s=args.stall_timeout if args.stall_timeout is not None else 10.0,
-        )
-        viz = VizCfg(gui=bool(args.gui), follow_camera=args.follow_camera, goal_overlay=args.goal_overlay)
-        spec = RunSpec(
-            method=args.method,
-            robot=args.robot if args.robot is not None else "dingo",
-            scene=args.scene if args.scene is not None else "kujiale_0003",
-            route=args.route,
-            spawn=tuple(args.spawn) if args.spawn is not None else None,
-            goal=tuple(args.goal) if args.goal is not None else None,
-            spawn_yaw=args.spawn_yaw,
-            seed=args.seed if args.seed is not None else 0,
-            method_params=policy_args_dict,
-            limits=limits,
-            viz=viz,
-            output_dir=Path(args.output) if args.output is not None else None,
-        )
-
-    # 3. Validate spec
-    try:
-        validate_spec(spec)
-    except ValueError as exc:
-        logger.error("Spec validation error: %s", exc)
+    if refuse_if_simulator_busy(args.force):
         return 1
-
-    # 4. Resolve output directory
-    if args.output is not None:
-        run_dir = Path(args.output).resolve()
-    elif spec.output_dir is not None:
-        run_dir = Path(spec.output_dir).resolve()
-    else:
-        run_dir = generate_run_dir(spec)
+    try:
+        spec = _spec_from_file(args) if args.spec else _spec_from_flags(args)
+        try:
+            validate_spec(spec)
+        except ValueError as exc:
+            raise CliError(f"Spec validation error: {exc}") from exc
+    except CliError as exc:
+        logger.error("%s", exc)
+        return 1
 
     return execute_single_run_process(
         spec=spec,
-        run_dir=run_dir,
+        run_dir=_resolve_run_dir(args, spec),
         timeout=args.timeout,
         quiet=args.quiet,
     )

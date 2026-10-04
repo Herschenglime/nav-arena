@@ -10,6 +10,10 @@ from __future__ import annotations
 import argparse
 
 
+class CliError(Exception):
+    """A usage or spec error to report to the user (exit code 1) without a traceback."""
+
+
 def print_subcommand_help(name: str) -> int:
     """Print the help text of subcommand ``name`` (used when no action is given) and return exit code 1."""
     from nav_arena.cli import create_parser  # deferred: the package imports the subcommand modules

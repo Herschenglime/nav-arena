@@ -20,9 +20,91 @@ from nav_arena.benchmarks.sweep import (
     resolve_batch_for_resume,
     validate_sweep_spec,
 )
+from nav_arena.cli._common import CliError
 from nav_arena.utils.logger import get_logger
 
 logger = get_logger("nav_arena.cli")
+
+
+_LOAD_ERRORS = (OSError, ValueError, KeyError, TypeError, yaml.YAMLError)
+"""Exceptions a malformed spec or batch file can raise."""
+
+_SWEEP_FLAG_OVERRIDES = (  # (argparse attribute, apply_sweep_overrides key)
+    ("name", "name"),
+    ("scene", "scene"),
+    ("methods", "methods"),
+    ("routes", "routes"),
+    ("seeds", "seeds"),
+    ("robots", "robots"),
+    ("timeout", "timeout_s"),
+    ("max_steps", "max_steps"),
+    ("goal_dist", "goal_dist"),
+    ("max_speed", "max_speed"),
+    ("stall_timeout", "stall_timeout"),
+    ("gui", "gui"),
+    ("follow_camera", "follow_camera"),
+    ("goal_overlay", "goal_overlay"),
+)
+
+
+def _split(value: str) -> list[str]:
+    return [item.strip() for item in value.split(",")]
+
+
+def _spec_from_flags(args: argparse.Namespace) -> SweepSpec:
+    scene = args.scene or "kujiale_0003"
+    return SweepSpec(
+        name=args.name or f"sweep_{scene}",
+        scene=scene,
+        robots=_split(args.robots) if args.robots else ["dingo"],
+        methods=_split(args.methods) if args.methods else ["iplanner"],
+        routes=_split(args.routes) if args.routes else ["hall_straight"],
+        seeds=[int(seed) for seed in _split(args.seeds)] if args.seeds else [0],
+    )
+
+
+def _load_spec_file(path: Any) -> SweepSpec:
+    try:
+        return SweepSpec.load(path)
+    except _LOAD_ERRORS as exc:
+        raise CliError(f"Failed to load sweep spec from '{path}': {exc}") from exc
+
+
+def _saved_spec(batch_dir: Path) -> SweepSpec | None:
+    """The sweep spec recorded in a batch's batch.yaml, if readable."""
+    batch_yaml = batch_dir / "batch.yaml"
+    if not batch_yaml.is_file():
+        return None
+    try:
+        data = yaml.safe_load(batch_yaml.read_text(encoding="utf-8")) or {}
+        return SweepSpec.from_dict(data["spec"]) if isinstance(data.get("spec"), dict) else None
+    except _LOAD_ERRORS as exc:
+        logger.warning("Failed to read spec from batch.yaml in %s: %s", batch_dir, exc)
+        return None
+
+
+def _resume_target(args: argparse.Namespace) -> tuple[Path, SweepSpec]:
+    """The batch directory to resume and the spec to resume it with (a given spec file wins over the saved one)."""
+    spec: SweepSpec | None = None
+    batch_dir: Path | None = None
+    if args.spec:
+        path = Path(args.spec)
+        if path.is_file() and path.name in ("manifest.json", "batch.yaml"):
+            batch_dir = path.parent.resolve()
+        elif path.is_dir() and (path / "manifest.json").is_file():
+            batch_dir = path.resolve()
+        elif path.is_file():
+            spec = _load_spec_file(path)
+    try:
+        if batch_dir is None:
+            batch_dir = resolve_batch_for_resume(spec, batch_arg=None if spec else (args.spec or args.name))
+    except FileNotFoundError as exc:
+        raise CliError(f"Resume failed: {exc}") from exc
+
+    spec = spec or _saved_spec(batch_dir)
+    if spec is None:
+        raise CliError("Could not resolve sweep specification for resuming.")
+    return batch_dir, spec
 
 
 def handle_sweep(args: argparse.Namespace) -> int:
@@ -30,119 +112,26 @@ def handle_sweep(args: argparse.Namespace) -> int:
     if args.jobs != 1:
         logger.error("--jobs %d is not supported: runs are sequential (use --jobs 1).", args.jobs)
         return 1
-    batch_dir: Path | None = None
-    spec: SweepSpec | None = None
-
-    if args.resume:
-        # 1. Check if args.spec points to an existing batch directory or batch file
-        if args.spec:
-            spec_path = Path(args.spec)
-            if spec_path.is_file() and spec_path.name in ("manifest.json", "batch.yaml"):
-                batch_dir = spec_path.parent.resolve()
-            elif spec_path.is_dir() and (spec_path / "manifest.json").is_file():
-                batch_dir = spec_path.resolve()
-            elif spec_path.is_file():
-                try:
-                    spec = SweepSpec.load(spec_path)
-                except Exception as exc:
-                    logger.error("Failed to load sweep spec from '%s': %s", args.spec, exc)
-                    return 1
-                try:
-                    batch_dir = resolve_batch_for_resume(spec, batch_arg=None)
-                except FileNotFoundError as exc:
-                    logger.error("Resume failed: %s", exc)
-                    return 1
-
-        if batch_dir is None:
-            try:
-                batch_dir = resolve_batch_for_resume(spec, batch_arg=args.spec or args.name)
-            except FileNotFoundError as exc:
-                logger.error("Resume failed: %s", exc)
-                return 1
-
-        # Load spec from batch_dir / "batch.yaml" if not already loaded from YAML file
-        batch_yaml = batch_dir / "batch.yaml"
-        if batch_yaml.is_file():
-            try:
-                data = yaml.safe_load(batch_yaml.read_text(encoding="utf-8")) or {}
-                if "spec" in data and isinstance(data["spec"], dict):
-                    saved_spec = SweepSpec.from_dict(data["spec"])
-                    if spec is None:
-                        spec = saved_spec
-            except Exception as exc:
-                logger.warning("Failed to read spec from batch.yaml in %s: %s", batch_dir, exc)
-
-        if spec is None:
-            logger.error("Could not resolve sweep specification for resuming.")
-            return 1
-    else:
-        if args.spec:
-            try:
-                spec = SweepSpec.load(args.spec)
-            except Exception as exc:
-                logger.error("Failed to load sweep spec from '%s': %s", args.spec, exc)
-                return 1
+    try:
+        batch_dir: Path | None = None
+        if args.resume:
+            batch_dir, spec = _resume_target(args)
         else:
-            scene = args.scene or "kujiale_0003"
-            methods = [m.strip() for m in args.methods.split(",")] if args.methods else ["iplanner"]
-            routes = [r.strip() for r in args.routes.split(",")] if args.routes else ["hall_straight"]
-            seeds = [int(s.strip()) for s in args.seeds.split(",")] if args.seeds else [0]
-            robots = [r.strip() for r in args.robots.split(",")] if args.robots else ["dingo"]
-            name = args.name or f"sweep_{scene}"
-            spec = SweepSpec(
-                name=name,
-                scene=scene,
-                robots=robots,
-                methods=methods,
-                routes=routes,
-                seeds=seeds,
-            )
+            spec = _load_spec_file(args.spec) if args.spec else _spec_from_flags(args)
 
-    if spec is None:
-        logger.error("Could not resolve sweep specification.")
-        return 1
-
-    # Extract CLI overrides
-    overrides: dict[str, Any] = {}
-    if args.name is not None:
-        overrides["name"] = args.name
-    if args.scene is not None:
-        overrides["scene"] = args.scene
-    if args.methods is not None:
-        overrides["methods"] = args.methods
-    if args.routes is not None:
-        overrides["routes"] = args.routes
-    if args.seeds is not None:
-        overrides["seeds"] = args.seeds
-    if args.robots is not None:
-        overrides["robots"] = args.robots
-    if args.timeout is not None:
-        overrides["timeout_s"] = args.timeout
-    if args.max_steps is not None:
-        overrides["max_steps"] = args.max_steps
-    if args.goal_dist is not None:
-        overrides["goal_dist"] = args.goal_dist
-    if args.max_speed is not None:
-        overrides["max_speed"] = args.max_speed
-    if args.stall_timeout is not None:
-        overrides["stall_timeout"] = args.stall_timeout
-    if args.gui is not None:
-        overrides["gui"] = args.gui
-    if args.follow_camera is not None:
-        overrides["follow_camera"] = args.follow_camera
-    if args.goal_overlay is not None:
-        overrides["goal_overlay"] = args.goal_overlay
-
-    try:
-        spec = apply_sweep_overrides(spec, overrides, logger=logger)
-    except Exception as exc:
-        logger.error("Failed to apply sweep overrides: %s", exc)
-        return 1
-
-    try:
-        validate_sweep_spec(spec)
-    except ValueError as exc:
-        logger.error("Sweep validation error: %s", exc)
+        overrides = {
+            key: getattr(args, attr) for attr, key in _SWEEP_FLAG_OVERRIDES if getattr(args, attr, None) is not None
+        }
+        try:
+            spec = apply_sweep_overrides(spec, overrides, logger=logger)
+        except _LOAD_ERRORS as exc:
+            raise CliError(f"Failed to apply sweep overrides: {exc}") from exc
+        try:
+            validate_sweep_spec(spec)
+        except ValueError as exc:
+            raise CliError(f"Sweep validation error: {exc}") from exc
+    except CliError as exc:
+        logger.error("%s", exc)
         return 1
 
     return execute_sweep(

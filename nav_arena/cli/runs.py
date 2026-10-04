@@ -19,7 +19,7 @@ from nav_arena.benchmarks.results import append_results_row
 from nav_arena.benchmarks.sweep import check_preflight_processes
 from nav_arena.benchmarks.tracking import compare_batch, find_run_spec_for_rerun, list_runs, show_run
 from nav_arena.cli.run import execute_single_run_process
-from nav_arena.cli._help import print_subcommand_help
+from nav_arena.cli._common import print_subcommand_help
 from nav_arena.utils.logger import get_logger
 from nav_arena.utils.paths import RUNS_DIR
 

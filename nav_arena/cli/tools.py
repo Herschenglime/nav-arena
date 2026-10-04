@@ -15,8 +15,8 @@ import sys
 
 import yaml
 
-from nav_arena.cli._help import print_subcommand_help
-from nav_arena.cli._help import print_subcommand_help
+from nav_arena.cli._common import print_subcommand_help
+from nav_arena.cli._common import print_subcommand_help
 from nav_arena.utils.logger import get_logger
 
 logger = get_logger("nav_arena.cli")
