@@ -29,7 +29,7 @@ logger = get_logger("verify_baseline")
 def create_parser() -> argparse.ArgumentParser:
     """Create the CLI argument parser for verify_baseline."""
     parser = argparse.ArgumentParser(description="Evaluate an in-process navigation baseline on a PointNav route.")
-    parser.add_argument("--method", choices=list_policies(), required=True, help="Navigation policy to evaluate.")
+    parser.add_argument("--method", choices=list_policies(), default=None, help="Navigation policy to evaluate.")
     # robot / scene / route are validated after the app boots: the registries import Isaac Lab.
     parser.add_argument("--robot", default="dingo", help="Registered embodiment (e.g. dingo, nova_carter).")
     parser.add_argument("--scene", default="kujiale_0003", help="InteriorAgent scene ID or USD path.")
@@ -84,6 +84,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse and validate command line arguments."""
     parser = create_parser()
     args_cli = parser.parse_args(argv)
+    if args_cli.method is None:
+        parser.error("the following arguments are required: --method")
     try:
         validate_route_args(args_cli.route, args_cli.spawn, args_cli.goal)
     except ValueError as error:

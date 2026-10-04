@@ -286,10 +286,11 @@ class TestListRuns:
 
     def test_list_runs_all_batches(self, synthetic_runs_dir: Path):
         batches = list_runs(synthetic_runs_dir)
-        assert len(batches) == 2
+        assert len(batches) == 3
         batch_ids = [b["batch_id"] for b in batches]
         assert "20261004-1500_sweep_test1" in batch_ids
         assert "20261004-1600_sweep_test2" in batch_ids
+        assert "20261004_170000_iplanner_dingo_hall_straight_abcd" in batch_ids
 
         # Find batch 1
         b1 = next(b for b in batches if b["batch_id"] == "20261004-1500_sweep_test1")
@@ -304,6 +305,13 @@ class TestListRuns:
         assert b2["completed"] == 1
         assert b2["success_rate"] == 100.0  # 1 success out of 1 completed
         assert b2["status"] == "running"
+
+        # Find standalone run
+        b3 = next(b for b in batches if b["batch_id"] == "20261004_170000_iplanner_dingo_hall_straight_abcd")
+        assert b3["total_runs"] == 1
+        assert b3["completed"] == 1
+        assert b3["success_rate"] == 100.0
+        assert b3["status"] == "done"
 
     def test_list_runs_empty_dir(self, tmp_path: Path):
         empty_dir = tmp_path / "empty_runs"
@@ -376,6 +384,45 @@ class TestShowRun:
     def test_show_nonexistent_raises(self, synthetic_runs_dir: Path):
         with pytest.raises(FileNotFoundError):
             show_run("nonexistent_run_or_batch", synthetic_runs_dir)
+
+    def test_show_run_terminal_cause_exit_codes(self, tmp_path: Path):
+        runs_dir = tmp_path / "runs"
+        runs_dir.mkdir()
+
+        # Test failed -> exit_code = 1
+        fail_dir = runs_dir / "run_failed"
+        fail_dir.mkdir()
+        (fail_dir / "summary.json").write_text(json.dumps({"terminal_cause": "failed"}), encoding="utf-8")
+        info = show_run("run_failed", runs_dir)
+        assert info["outcome"]["exit_code"] == 1
+
+        # Test timeout -> exit_code = 1
+        to_dir = runs_dir / "run_timeout"
+        to_dir.mkdir()
+        (to_dir / "summary.json").write_text(json.dumps({"terminal_cause": "timeout"}), encoding="utf-8")
+        info = show_run("run_timeout", runs_dir)
+        assert info["outcome"]["exit_code"] == 1
+
+        # Test graceful non-completion (e.g. collision) -> exit_code = 2
+        coll_dir = runs_dir / "run_coll"
+        coll_dir.mkdir()
+        (coll_dir / "summary.json").write_text(json.dumps({"terminal_cause": "collision"}), encoding="utf-8")
+        info = show_run("run_coll", runs_dir)
+        assert info["outcome"]["exit_code"] == 2
+
+    def test_corrupt_or_non_dict_summary_resilience(self, tmp_path: Path):
+        runs_dir = tmp_path / "runs"
+        runs_dir.mkdir()
+        corrupt_dir = runs_dir / "run_null_summary"
+        corrupt_dir.mkdir()
+        (corrupt_dir / "summary.json").write_text("null", encoding="utf-8")
+
+        runs = list_runs(runs_dir)
+        assert len(runs) == 1
+        assert runs[0]["status"] == "unknown"
+
+        info = show_run("run_null_summary", runs_dir)
+        assert info["status"] == "unknown"
 
 
 class TestCompareBatch:

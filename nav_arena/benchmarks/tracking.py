@@ -128,14 +128,20 @@ def list_runs(runs_dir: Path, batch_id: str | None = None) -> list[dict[str, Any
             return []
 
         batches: list[dict[str, Any]] = []
-        batch_dirs = [
+        candidate_dirs = [
             d for d in runs_root.iterdir()
-            if d.is_dir() and ((d / "manifest.json").is_file() or (d / "batch.yaml").is_file())
+            if d.is_dir() and (
+                (d / "manifest.json").is_file()
+                or (d / "batch.yaml").is_file()
+                or (d / "run_spec.json").is_file()
+                or (d / "summary.json").is_file()
+                or (d / "results.csv").is_file()
+            )
         ]
         # Sort newest first based on directory mtime
-        batch_dirs.sort(key=lambda d: d.stat().st_mtime, reverse=True)
+        candidate_dirs.sort(key=lambda d: d.stat().st_mtime, reverse=True)
 
-        for b_dir in batch_dirs:
+        for b_dir in candidate_dirs:
             b_id = b_dir.name
             manifest_path = b_dir / "manifest.json"
             batch_yaml_path = b_dir / "batch.yaml"
@@ -146,54 +152,104 @@ def list_runs(runs_dir: Path, batch_id: str | None = None) -> list[dict[str, Any
             completed = 0
             success_count = 0
 
-            # 1. Inspect batch.yaml
-            if batch_yaml_path.is_file():
-                try:
-                    b_yaml = yaml.safe_load(batch_yaml_path.read_text(encoding="utf-8"))
-                    if isinstance(b_yaml, dict):
-                        b_id = b_yaml.get("batch_id", b_id)
-                        status = b_yaml.get("status", status)
-                except Exception as exc:
-                    logger.debug("Failed reading %s: %s", batch_yaml_path, exc)
+            if manifest_path.is_file() or batch_yaml_path.is_file():
+                # 1. Inspect batch.yaml
+                if batch_yaml_path.is_file():
+                    try:
+                        b_yaml = yaml.safe_load(batch_yaml_path.read_text(encoding="utf-8"))
+                        if isinstance(b_yaml, dict):
+                            b_id = b_yaml.get("batch_id", b_id)
+                            status = b_yaml.get("status", status)
+                    except Exception as exc:
+                        logger.debug("Failed reading %s: %s", batch_yaml_path, exc)
 
-            # 2. Inspect manifest.json
-            if manifest_path.is_file():
-                try:
-                    manifest = BatchManifest.load(manifest_path)
-                    total_runs = len(manifest.runs)
-                    completed = sum(1 for r in manifest.runs if r.status == RunStatus.DONE.value)
-                    for r in manifest.runs:
-                        if r.terminal_cause == "goal_reached" or r.exit_code == 0:
-                            success_count += 1
-                    if status == "unknown":
-                        if total_runs > 0 and completed == total_runs:
-                            status = "done"
-                        elif any(r.status == RunStatus.RUNNING.value for r in manifest.runs):
-                            status = "running"
-                        elif all(r.status == RunStatus.QUEUED.value for r in manifest.runs):
-                            status = "queued"
-                        else:
-                            status = "partial"
-                except Exception as exc:
-                    logger.debug("Failed reading %s: %s", manifest_path, exc)
+                # 2. Inspect manifest.json
+                if manifest_path.is_file():
+                    try:
+                        manifest = BatchManifest.load(manifest_path)
+                        total_runs = len(manifest.runs)
+                        completed = sum(1 for r in manifest.runs if r.status == RunStatus.DONE.value)
+                        for r in manifest.runs:
+                            if r.terminal_cause == "goal_reached" or r.exit_code == 0:
+                                success_count += 1
+                        if status == "unknown":
+                            if total_runs > 0 and completed == total_runs:
+                                status = "done"
+                            elif any(r.status == RunStatus.RUNNING.value for r in manifest.runs):
+                                status = "running"
+                            elif all(r.status == RunStatus.QUEUED.value for r in manifest.runs):
+                                status = "queued"
+                            else:
+                                status = "partial"
+                    except Exception as exc:
+                        logger.debug("Failed reading %s: %s", manifest_path, exc)
 
-            # 3. Inspect results.csv for more accurate success counts
-            if results_csv_path.is_file():
-                try:
-                    with results_csv_path.open("r", encoding="utf-8") as f:
-                        reader = csv.DictReader(f)
-                        csv_rows = list(reader)
-                        if total_runs == 0 and csv_rows:
-                            total_runs = len(csv_rows)
-                        if completed == 0 and csv_rows:
-                            completed = len(csv_rows)
-                        if csv_rows:
-                            success_count = sum(
-                                1 for row in csv_rows
-                                if str(row.get("success", "")).strip().lower() in ("true", "1")
-                            )
-                except Exception as exc:
-                    logger.debug("Failed reading %s: %s", results_csv_path, exc)
+                # 3. Inspect results.csv for more accurate success counts
+                if results_csv_path.is_file():
+                    try:
+                        with results_csv_path.open("r", encoding="utf-8") as f:
+                            reader = csv.DictReader(f)
+                            csv_rows = list(reader)
+                            if total_runs == 0 and csv_rows:
+                                total_runs = len(csv_rows)
+                            if completed == 0 and csv_rows:
+                                completed = len(csv_rows)
+                            if csv_rows:
+                                success_count = sum(
+                                    1 for row in csv_rows
+                                    if str(row.get("success", "")).strip().lower() in ("true", "1")
+                                )
+                    except Exception as exc:
+                        logger.debug("Failed reading %s: %s", results_csv_path, exc)
+            else:
+                # Standalone single run directory
+                total_runs = 1
+                summary_path = b_dir / "summary.json"
+                summary_data: dict[str, Any] = {}
+                if summary_path.is_file():
+                    try:
+                        raw = json.loads(summary_path.read_text(encoding="utf-8"))
+                        if isinstance(raw, dict):
+                            summary_data = raw
+                    except Exception as exc:
+                        logger.debug("Failed reading %s: %s", summary_path, exc)
+
+                terminal_cause = summary_data.get("terminal_cause")
+                success = False
+                if "success" in summary_data:
+                    success = bool(summary_data["success"])
+                elif terminal_cause == "goal_reached":
+                    success = True
+
+                if summary_data:
+                    completed = 1
+                    if terminal_cause:
+                        status = "done" if terminal_cause not in ("timeout", "failed") else terminal_cause
+                    else:
+                        status = "done"
+                    if success:
+                        success_count = 1
+                elif results_csv_path.is_file():
+                    try:
+                        with results_csv_path.open("r", encoding="utf-8") as f:
+                            rows = list(csv.DictReader(f))
+                            if rows:
+                                completed = 1
+                                r_row = rows[0]
+                                if str(r_row.get("success", "")).strip().lower() in ("true", "1"):
+                                    success = True
+                                    success_count = 1
+                                terminal_cause = r_row.get("terminal_cause")
+                                if terminal_cause:
+                                    status = "done" if terminal_cause not in ("timeout", "failed") else terminal_cause
+                                else:
+                                    status = "done"
+                    except Exception as exc:
+                        logger.debug("Failed reading %s: %s", results_csv_path, exc)
+                elif (b_dir / "worker.log").is_file():
+                    status = "finished"
+                elif (b_dir / "run_spec.json").is_file():
+                    status = "queued"
 
             success_rate = (
                 round((success_count / completed) * 100.0, 1)
@@ -531,7 +587,9 @@ def show_run(run_or_batch_id: str, runs_dir: Path) -> dict[str, Any]:
     summary_data: dict[str, Any] = {}
     if summary_path and summary_path.is_file():
         try:
-            summary_data = json.loads(summary_path.read_text(encoding="utf-8"))
+            raw = json.loads(summary_path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                summary_data = raw
         except Exception as exc:
             logger.debug("Failed reading %s: %s", summary_path, exc)
 
@@ -596,6 +654,8 @@ def show_run(run_or_batch_id: str, runs_dir: Path) -> dict[str, Any]:
         exit_code = manifest_rec.exit_code
     elif terminal_cause == "goal_reached":
         exit_code = 0
+    elif terminal_cause in ("failed", "timeout"):
+        exit_code = 1
     elif terminal_cause:
         exit_code = 2
 

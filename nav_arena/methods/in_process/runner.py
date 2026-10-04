@@ -103,7 +103,7 @@ class _Recorder:
         self._next_snapshot = 0.0
         if self.dir is None:
             return
-        self.dir.mkdir(parents=True, exist_ok=False)
+        self.dir.mkdir(parents=True, exist_ok=True)
         settings = dict(
             policy=policy.name, policy_cfg=asdict(policy.cfg), plan_hz=policy.plan_hz, episode=_jsonable(cfg), **extra
         )

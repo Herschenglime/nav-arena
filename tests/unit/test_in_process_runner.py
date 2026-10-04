@@ -241,12 +241,12 @@ def test_recorder_writes_run_artifacts(tmp_path):
     assert list(out.glob("rgb_*.png")) and list(out.glob("depth_m_*.npy"))
 
 
-def test_recorder_refuses_to_overwrite_a_previous_run(tmp_path):
-    """Verify an existing output directory is never reused."""
+def test_recorder_allows_existing_output_dir(tmp_path):
+    """Verify an existing output directory (e.g. pre-created by sweep planner) is accepted."""
     out = tmp_path / "run"
     out.mkdir()
-    with pytest.raises(FileExistsError):
-        run_episode(FakeTask(), GoalSeeker(), _cfg(output_dir=out))
+    result = run_episode(FakeTask(), GoalSeeker(), _cfg(output_dir=out))
+    assert (out / "settings.json").is_file()
 
 
 class FakeViewer:

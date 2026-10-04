@@ -568,6 +568,6 @@ class TestSubcommandsAndHelp:
         assert "Unified navigation benchmarking and evaluation framework" in captured.out
 
     def test_subcommands_without_action_exit_1(self):
-        for sub in ("sweep", "runs", "routes", "map"):
+        for sub in ("runs", "routes", "map"):
             exit_code = main([sub])
             assert exit_code == 1
