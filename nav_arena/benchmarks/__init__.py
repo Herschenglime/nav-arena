@@ -21,6 +21,13 @@ from nav_arena.benchmarks.spec import (
     validate_spec,
 )
 
+from nav_arena.benchmarks.tracking import (
+    compare_batch,
+    find_run_spec_for_rerun,
+    list_runs,
+    show_run,
+)
+
 _SESSION_EXPORTS = {
     "EpisodeSpec",
     "RunSession",
@@ -42,7 +49,11 @@ __all__ = [
     "VALID_RUN_STATUSES",
     "VizCfg",
     "apply_overrides",
+    "compare_batch",
+    "find_run_spec_for_rerun",
+    "list_runs",
     "print_result_summary",
+    "show_run",
     "validate_spec",
 ]
 
