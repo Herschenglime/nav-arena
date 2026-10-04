@@ -17,6 +17,8 @@ from isaaclab.assets.articulation import Articulation
 from isaaclab.managers.action_manager import ActionTerm, ActionTermCfg
 from isaaclab.utils.configclass import configclass
 
+from nav_arena.embodiments.kinematics import diff_drive_ik
+
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv
 
@@ -88,11 +90,12 @@ class DifferentialDriveAction(ActionTerm):
         v = self._processed_actions[:, 0]
         omega = self._processed_actions[:, 1]
 
-        # Differential drive inverse kinematics
-        # v_left = (v - omega * L / 2) / R
-        # v_right = (v + omega * L / 2) / R
-        v_left = (v - omega * (self._wheel_base / 2.0)) / self._wheel_radius
-        v_right = (v + omega * (self._wheel_base / 2.0)) / self._wheel_radius
+        v_left, v_right = diff_drive_ik(
+            v=v,
+            omega=omega,
+            wheel_base=self._wheel_base,
+            wheel_radius=self._wheel_radius,
+        )
 
         self._wheel_vel_targets[:, 0] = v_left
         self._wheel_vel_targets[:, 1] = v_right
