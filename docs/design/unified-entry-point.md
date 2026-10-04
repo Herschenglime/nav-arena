@@ -18,6 +18,16 @@ Agents run scripts through `./agy_python.sh <script.py> [args]` (sets up the env
 `pytest -c nav_arena/pyproject.toml nav_arena/tests/unit -q` (about 200 tests, about 8 s). Integration tests
 (`-m integration`) boot Isaac and need the GPU free.
 
+**Install.** The `nav_arena` command exists only after the package is (re)installed in editable mode, because
+console scripts are generated at install time. From `~/simulation` with `setup.env` sourced:
+`uv pip install --python "$VIRTUAL_ENV/bin/python" --no-deps -e nav_arena` (nothing is installed globally; `--no-deps` keeps
+Isaac's pinned torch/numpy). Re-run it after adding the `[project.scripts]` entry, and mention it in the README's
+setup section. `python -m nav_arena` works without it.
+
+**Workspace conventions.** `~/simulation/AGENTS.md` (outside this repo) is the source of truth for how commands are run
+(`source setup.env`, `python -u nav_arena/nav_arena/scripts/...`, `./agy_python.sh` for agents, `--viz kit`); read it
+first. Its "~2 s" unit-test timing is stale (about 8 s now).
+
 **Process rules.** Plan before implementing; record decisions in a reviewable doc. Never run GPU jobs in the background
 and check `ps aux | grep -E 'verify_|isaaclab'` first: a background batch once hung the owner's GUI session.
 
@@ -46,6 +56,8 @@ and check `ps aux | grep -E 'verify_|isaaclab'` first: a background batch once h
 - One learned baseline per Python process (upstream NavDP modules share names such as `policy_agent`).
 - `_Recorder` creates the run directory with `mkdir(exist_ok=False)`, so run ids must be unique.
 - Cameras and `render_interval`, the scene, the robot and the policy are fixed when the env is built.
+- The derived Dingo USD is currently built when `nav_arena.embodiments` is imported (phase 0 below makes it lazy);
+  until then a failed build breaks the import of the whole package, and therefore the CLI's worker.
 
 **Known quirks (not blockers).** GUI playback can look jerky although simulated speed is constant (uneven wall-clock
 step cost; see `docs/baseline_integration_results.md`). The goal arrow is hidden from cameras on purpose
@@ -286,6 +298,7 @@ Each phase is independently shippable and leaves `verify_baseline.py` working.
 
 | Phase | Deliverable | Done when |
 |---|---|---|
+| 0 | **Lazy Dingo asset.** `embodiments/dingo.py` calls `ensure_derived_asset` at import time (`DINGO_USD_PATH = _resolve_dingo_usd()`), so a failed build (unwritable cache, upstream layout change, `pxr` missing) raises from `import nav_arena.embodiments` and breaks every script, even for other robots. Build on first use instead: resolve the path when the Dingo's `ArticulationCfg` is constructed or its embodiment is first requested (e.g. a factory for `DINGO_CFG`, or `DingoEmbodimentCfg.articulation_cfg` built lazily), keep the source path fallback when the NavDP checkout is absent, and keep the build in a subprocess (no `pxr` import in the parent before `AppLauncher`) | importing `nav_arena.embodiments` never builds or fails; `get_embodiment("nova_carter")` works with the Dingo build broken; the first Dingo spawn builds and caches the layer; `tests/unit/test_embodiment_assets.py` and the Dingo integration tests still pass |
 | 1 | `RunSpec`, `RunSession`/`EpisodeSpec` split (one episode per process), `benchmarks/worker.py`, `verify_baseline.py` as a shim, `nav_arena run`, console script, `results.csv` row per run, method-agnostic schema with reserved `nav2` | `nav_arena run ...` reproduces a current `verify_baseline` result (iPlanner `hall_straight` reaches the goal in about 19 s); the shim and CLI share one implementation; unit tests for spec parsing/validation and override logging |
 | 2 | `nav_arena sweep`, spec files, batch directory, manifest state machine, per-run timeout, Ctrl-C safety, `--resume`, Isaac-busy guard | a small sweep completes; killing it mid-run and `--resume` finishes the rest; manifest state-machine tests with a fake worker (no Isaac) |
 | 3 | `runs list/show/compare/rerun` | `compare` reproduces the results table in `docs/baseline_integration_results.md` from a batch |
@@ -308,3 +321,5 @@ run (Dingo, `hall_straight`, headless) per phase that touches the worker.
 - Parallelism: the cause of the earlier GUI hang under concurrent load is unknown (the GB10 has up to 96 GB addressable
   GPU memory, so plain memory exhaustion is unlikely); investigate before any `--jobs N`.
 - Importing historical `verify_nav2.py` results and the existing 14 baseline runs into the new schema.
+- Stop recovery for iPlanner/VIPlanner (a permanent stop on one fear spike) is deliberately postponed; it belongs to
+  future work, not to this design.

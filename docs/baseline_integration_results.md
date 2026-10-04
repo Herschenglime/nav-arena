@@ -1,8 +1,8 @@
 # Learned visual-navigation baselines in nav_arena: results and future work
 
 Branch `feat/navdp-baselines`. This document records what the integration delivered, what the baselines did in
-closed loop, and what is left. The working log with every decision and its rationale is
-`docs/navdp_integration_log.md` (decisions D1-D21); this file is the durable summary.
+closed loop, and what is left. This file is the durable summary; the per-decision working log that preceded it was
+removed (it was a temporary review log) and remains in the git history (`docs/navdp_integration_log.md`).
 
 Related: how-to guides in [`docs/guides/`](guides/) (adding a robot, choosing routes, running experiments) and the
 design for a unified entry point in [`docs/design/unified-entry-point.md`](design/unified-entry-point.md).
@@ -61,8 +61,6 @@ Reading the table:
 ## Known limitations
 
 - GUI playback looks like the robot is jolting forward (see future work). Recorded data does not show it.
-- `verify_nav2.py` was not re-run after moving Nav2; only the relocated launch file, the TF-tree test and the L2 ROS
-  tests were checked.
 - One baseline per process (upstream modules share names such as `policy_agent`).
 - Embodiments that use a runtime `stage_patch_fn` (none today) must disable physics replication; the Dingo does not need one.
 - A one-off Kit startup SIGSEGV (exit 139) was seen once and did not reproduce.
@@ -101,17 +99,16 @@ A quick diagnostic to add first: log wall-clock time per step type to the run ou
 (the timing script used for the numbers above was throwaway).
 
 ### Experiments and baselines
-- **Finish the matrix:** the 6 missing runs (`to_far_room` x5, ViNT on `through_doorway`), and repeat with several seeds
-  for the stochastic planners (NavDP, X-NavDP).
-- **Stop recovery for iPlanner/VIPlanner:** rotate in place or back up when stopped, or a looser fear threshold. Needs a
-  decision; currently a single fear spike is a permanent stop.
+- **Repeat with several seeds** for the stochastic planners (NavDP, X-NavDP). The results table above is partial (14 of
+  20 planned runs) and was judged sufficient to show the baselines work; the missing `to_far_room` and ViNT
+  `through_doorway` runs can be added whenever a full matrix is wanted.
+- **Stop recovery for iPlanner/VIPlanner (postponed):** rotate in place or back up when stopped, or a looser fear
+  threshold. Currently a single fear spike is a permanent stop.
 - **Goal tolerance default:** whether NavDP's 0.47 m finish counts (`--goal-dist 0.5` would).
 - **Compare with Nav2** on the same routes and metrics now that the runner reports time-to-goal, path length and stops.
 - **Image-goal baselines** (ViNT, NavDP image goal): goal images are currently rendered at the goal pose; add
   held-out goal views.
 
 ### Engineering
-- Re-run `verify_nav2.py` after the Nav2 move.
 - Multi-process or isolated-subprocess policy loading to lift the one-baseline-per-process limit.
 - Checkpoint tooling (`tools/navdp_checkpoints.py verify/convert`, planned but low priority).
-- Delete `docs/navdp_integration_log.md` before merge; decide whether to keep `requirements/baselines-mmcv.md`.
