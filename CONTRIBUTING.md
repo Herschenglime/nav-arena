@@ -14,7 +14,7 @@ nav_arena/
 ├── embodiments/  # Robot kinematics, sensor configs, in-memory URDF synthesis (ZERO ROS 2 dependencies)
 ├── tasks/        # RL/benchmark environments (ManagerBasedRLEnv), MDP terms, episode resets
 ├── scenes/       # Non-destructive USD loaders, delta layer conditioning, BVH preprocessors
-├── methods/      # Autonomy baselines and upstream stack configs (Nav2 parameters and bringup)
+├── methods/      # Autonomy baselines: in_process/ (policies run in the sim process) and ros2/ (external stacks, e.g. Nav2)
 ├── ros2/         # ROS 2 middleware bridges (OmniGraph builders, action adapters, async publisher nodes)
 ├── tools/        # Standalone offline utilities (CLI 2D occupancy grid generator)
 ├── utils/        # Cross-cutting primitives (ArenaLogger, managed_process, paths, create_mock_env)
@@ -30,7 +30,11 @@ nav_arena/
   - Put pure kinematics calculations in [`kinematics.py`](file:///home/robopi/simulation/nav_arena/nav_arena/embodiments/kinematics.py) (e.g. `diff_drive_ik`, `diff_drive_fk`).
 - **`nav_arena.tasks`**: Inherit from Isaac Lab's `ManagerBasedRLEnv`. Define MDP command terms, observation groups, termination conditions, and contact metrics here.
 - **`nav_arena.scenes`**: Load USD stages and apply non-destructive delta layers. Never mutate source USD assets directly on disk.
-- **`nav_arena.methods`**: Autonomy algorithms and baselines. Nav2 bringup, launch files, parameter YAMLs, and alternative planning methods belong here.
+- **`nav_arena.methods`**: Autonomy algorithms and baselines, split by execution model.
+  - **`methods/ros2/`**: External ROS 2 stacks run as subprocesses (Nav2 bringup, launch files, parameter YAMLs under `ros2/nav2/`).
+  - **`methods/in_process/`**: Policies executed directly in the simulation process. Implement [`InProcessPolicy`](file:///home/robopi/simulation/nav_arena/nav_arena/methods/in_process/base.py) (`step(PolicyObservation) -> Plan`) and register it with `register_policy`; policies return a local path and the shared follower ([`controller.py`](file:///home/robopi/simulation/nav_arena/nav_arena/methods/in_process/controller.py)) turns it into velocities at the control rate.
+  - **Critical Invariant**: `methods/in_process` must not import `isaacsim`/`omni`/ROS 2 at module level, so policies stay unit-testable on the CPU; import heavy model frameworks lazily in constructors.
+  - The NavDP-family adapters wrap an upstream NavDP checkout (see `NAV_ARENA_NAVDP_ROOT`) and enforce **one baseline per process**, because upstream modules share names (e.g. `policy_agent`).
 - **`nav_arena.ros2`**: The boundary between Isaac Sim and ROS 2 middleware. Contains OmniGraph generators ([`graph_builder.py`](file:///home/robopi/simulation/nav_arena/nav_arena/ros2/graph_builder.py)), action adapters ([`action_adapter.py`](file:///home/robopi/simulation/nav_arena/nav_arena/ros2/adapters/action_adapter.py)), and publisher nodes ([`sensors.py`](file:///home/robopi/simulation/nav_arena/nav_arena/ros2/sensors.py), [`state_publisher.py`](file:///home/robopi/simulation/nav_arena/nav_arena/ros2/state_publisher.py)).
 - **`nav_arena.tools`**: Offline CLI utilities (e.g. [`map_generator.py`](file:///home/robopi/simulation/nav_arena/nav_arena/tools/map_generator.py)). Utilities should be self-contained and callable via `python -m nav_arena.tools.<tool_name>`.
 - **`nav_arena.utils`**: Shared developer infrastructure ([`logger.py`](file:///home/robopi/simulation/nav_arena/nav_arena/utils/logger.py), [`process.py`](file:///home/robopi/simulation/nav_arena/nav_arena/utils/process.py), [`paths.py`](file:///home/robopi/simulation/nav_arena/nav_arena/utils/paths.py), [`sim.py`](file:///home/robopi/simulation/nav_arena/nav_arena/utils/sim.py)).
@@ -113,6 +117,7 @@ with BackgroundRos2Executor(nodes=[action_adapter, state_publisher, scan_publish
 - **Quaternion Ordering**: Isaac Lab's `AssetBaseCfg.InitialStateCfg.rot` strictly expects **`(x, y, z, w)`**, NOT `(w, x, y, z)`.
   - Identity rotation: `(0.0, 0.0, 0.0, 1.0)`.
   - Inverted roll (180° around X-axis): `(1.0, 0.0, 0.0, 0.0)`.
+- **Scripts and boot order**: Scripts must not import `nav_arena.embodiments`, `nav_arena.tasks`, or anything else that pulls in Isaac Lab/`pxr` at module level: `AppLauncher` must boot first (the app crashes otherwise). Do not populate argparse `choices` from the registries; validate names after boot.
 - **Spawn Ground Clearance**: Mobile robots must never spawn at `pos=(0.0, 0.0, 0.0)` on a `GroundPlane` at $z=0$. Always provide clearance (e.g. `pos=(0.0, 0.0, 0.25)`) to prevent explosive PhysX depenetration impulses on step 0.
 - **USD Delta Layers & Raycaster Static BVH**: Isaac Lab's `MultiMeshRayCaster` bakes its static triangle BVH (`merge_prim_meshes=True`) at environment load. Calling `prim.SetActive(False)` *after* stage load drops PhysX collision, but **does not rebuild the raycaster BVH**. To open doors or alter scene geometry for sensors, pre-condition scenes prior to stage load using USD composition delta layers (`subLayerPaths` via `get_preprocessed_usd`).
 - **Standard Coordinate Frames (REP-105)**: The bridge strictly maintains the standard transform tree: `map -> odom -> base_link -> chassis_link -> lidar_link`. Odometry publishes `odom -> base_link`, and AMCL or static state publisher provides `map -> odom`.

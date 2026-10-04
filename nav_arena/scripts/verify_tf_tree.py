@@ -72,7 +72,7 @@ def run_tf_verification(simulation_app):
     executor = None
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    launch_file_path = os.path.abspath(os.path.join(script_dir, "..", "methods", "nav2", "launch", "robot_description.launch.py"))
+    launch_file_path = os.path.abspath(os.path.join(script_dir, "..", "methods", "ros2", "nav2", "launch", "robot_description.launch.py"))
     launch_cmd = [
         sys.executable,
         "/opt/ros/jazzy/bin/ros2",

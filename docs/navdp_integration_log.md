@@ -22,6 +22,12 @@ _(none yet)_
 | D5 | Camera uses `IsaacRtxRendererCfg` explicitly | Labmate validated this; Lab's default is the generic `RendererCfg` | one line |
 | D6 | Timing: keep nav_arena's dt=0.01 / decimation=2 (50 Hz control); only make `render_interval` configurable (20 → 5 Hz camera for baselines) | User: perfect replication not required | — |
 | D7 | Only InteriorAgent scenes (no Nucleus office) | User decision | — |
+| D8 | `InProcessPolicy.step(PolicyObservation) -> Plan(path, stop, diagnostics)` — returns a path, not `(v, w)`; observation is a dataclass, not a dict | Planner (3-5 Hz) and follower (control rate) are decoupled, as in the labmate's design; typed fields catch bad inputs | contract in `methods/in_process/base.py` |
+| D9 | Dropped `InProcessPolicy.is_goal_reached()` from the original plan | Goal checking belongs to the task (`PointNavTask.is_goal_reached`), not the policy | — |
+| D10 | Labmate's `follow_path` ported verbatim (as `FollowerCfg` + `follow_path`); his `wheel_speeds` dropped in favor of `diff_drive_ik` / `DifferentialDriveAction` | Avoids duplicate kinematics; his follower is what produced his working runs | — |
+| D11 | Registry names use underscores (`x_navdp`); hyphenated upstream spellings accepted | Matches the original plan and Python identifiers | — |
+| D12 | Policy `seed` defaults to 0 (torch + numpy seeded at construction) | NavDP diffusion sampling is stochastic; makes runs repeatable | `seed=None` |
+| D13 | Moved Nav2 to `methods/ros2/nav2`; also updated `verify_tf_tree.py`, which the original plan missed | It referenced the old path | — |
 
 ## Progress
 
@@ -29,7 +35,7 @@ _(none yet)_
 - [x] Paths refactor — `4d42904`
 - [x] Dependencies + pinned requirements — `e8dc139`
 - [x] Phase 2 — RGB-D camera + multi-robot verify_embodiment (headless run: Dingo+camera PASS, Carter PASS)
-- [ ] Phase 3 — methods restructure + NavDP adapter port
+- [x] Phase 3 — methods restructure + NavDP adapter port (129 unit tests; real-model smoke tests on all five)
 - [ ] Phase 4 — generalized PointNavTask
 - [ ] Phase 5 — episode runner, verify_baseline, Dingo integration test
 
@@ -43,3 +49,13 @@ _(none yet)_
   `(1,360,640,3)`, depth `(1,360,640,1)` float32. Matches the expected geometry (camera ~0.42 m above floor,
   20.6 deg half-VFOV). The Dingo drove 0.139 m in 60 steps at v=0.5 (Carter 0.159 m) — acceleration-limited
   at start, not a caster-drag signal; no ground-truth friction test exists yet (see Phase 5 integration test).
+
+- **Phase 3 / fidelity vs. labmate's recordings** (real checkpoints, GB10, his recorded frames): iPlanner reproduces his
+  logged paths and fear values exactly (0.0 m deviation, 6 frames). ViNT and VIPlanner match exactly. NavDP matches at
+  step 0 and within 0.16 m afterwards (stochastic + frame history absent in my isolated-frame replay). X-NavDP matches at
+  step 0, ~2.4 m apart later (stateful pose guidance, replay has no history). Not a regression: expected for stateful
+  stochastic planners; the real check is closed-loop behavior in Phase 5.
+- **Phase 3 / checkpoint hashes:** all recorded SHA-256 values match the files on disk. iPlanner had no recorded hash in
+  the labmate's JSON; I recorded the hash of the local converted file (`b801f444...`), whose original source is unknown.
+- **Phase 3 / spec drift:** the pinned dependency list also covers VIPlanner's stack, which is already installed
+  (mmcv wheel copied from `alex-spark`, `mmcv.ops` loads).

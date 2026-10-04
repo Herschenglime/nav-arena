@@ -133,7 +133,7 @@ def run_nav2_verification(simulation_app):
 
     # 8. Launch Nav2 stack via ros2 launch
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    launch_script = os.path.abspath(os.path.join(script_dir, "..", "methods", "nav2", "launch", "nav2.launch.py"))
+    launch_script = os.path.abspath(os.path.join(script_dir, "..", "methods", "ros2", "nav2", "launch", "nav2.launch.py"))
     nav2_cmd = [
         sys.executable,
         "/opt/ros/jazzy/bin/ros2",

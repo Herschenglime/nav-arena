@@ -51,6 +51,26 @@ python -u -m nav_arena.tools.map_generator --scene kujiale_0003 --cell-size 0.05
 pytest -c nav_arena/pyproject.toml nav_arena/tests/unit -v
 ```
 
+### Learned Baseline Setup (NavDP family)
+
+The in-process learned baselines (iPlanner, ViNT, NavDP, VIPlanner, X-NavDP) keep their network code upstream in a NavDP checkout at `<workspace>/NavDP` (override with `NAV_ARENA_NAVDP_ROOT`). Use the maintained fork, which carries the device-handling and Python 3.12 fixes the baselines need:
+
+```bash
+cd ~/simulation
+git clone git@github.com:Herschenglime/NavDP.git NavDP
+git -C NavDP checkout nav-arena          # tested with commit 8b9ee13
+```
+
+Install the extra Python packages into the existing Isaac Lab uv environment **without dependency resolution**, so Isaac's pinned torch/numpy stay in place (nothing is installed globally):
+
+```bash
+source setup.env
+uv pip install --python "$VIRTUAL_ENV/bin/python" --no-deps -r nav_arena/requirements/baselines.txt
+# VIPlanner additionally needs mmcv with CUDA ops: see nav_arena/requirements/baselines-mmcv.md
+```
+
+Checkpoints live in `NavDP/baselines/<planner>/checkpoints/`; their expected SHA-256 hashes and sources are recorded in [`navdp_adapter/checkpoints.py`](file:///home/robopi/simulation/nav_arena/nav_arena/methods/in_process/navdp_adapter/checkpoints.py). Only one baseline can be loaded per Python process (upstream modules share names), so run one method per invocation.
+
 ---
 
 ## 3. Execution & Verification Scripts
@@ -138,7 +158,7 @@ The test suite is organized into three distinct verification tiers:
 
 | Tier | Directory | Description | Typical Runtime | Target Environment |
 |---|---|---|---|---|
-| **L1: Unit Tests** | [`tests/unit/`](file:///home/robopi/simulation/nav_arena/tests/unit/) | Fast, CPU-only algorithmic & component tests (kinematics, LaserScan math, logger, process management, scene resolution, URDF synthesis). | ~2.2 seconds (52 tests) | Pure Python / CPU |
+| **L1: Unit Tests** | [`tests/unit/`](file:///home/robopi/simulation/nav_arena/tests/unit/) | Fast, CPU-only algorithmic & component tests (kinematics, LaserScan math, logger, process management, scene resolution, URDF synthesis, embodiment registry, sensor configs, paths, in-process policy adapters and path follower). | ~5 seconds (129 tests) | Pure Python / CPU |
 | **L2: ROS 2 Tests** | [`tests/ros2/`](file:///home/robopi/simulation/nav_arena/tests/ros2/) | Subprocess & ROS 2 middleware tests (Action adapters, OmniGraph builders, state publisher QoS, closed-loop driving). Marked with `@pytest.mark.ros2`. | ~30 seconds (4 tests) | ROS 2 Jazzy & Subprocess |
 | **L3: Simulation Tests** | [`tests/integration/`](file:///home/robopi/simulation/nav_arena/tests/integration/) | In-process Isaac Sim tests (occupancy grid generation, full `PointNavTask` stepping and resets, TF tree continuity). Marked with `@pytest.mark.integration`. | ~26 seconds (3 tests) | GPU / Isaac Sim PhysX |
 
@@ -170,7 +190,7 @@ The codebase is organized into cleanly decoupled subsystems:
 - **Embodiments ([`nav_arena.embodiments`](file:///home/robopi/simulation/nav_arena/nav_arena/embodiments/))**: Robot physical properties, kinematic configurations (`DifferentialDriveAction`), pure kinematics math ([`diff_drive_ik`](file:///home/robopi/simulation/nav_arena/nav_arena/embodiments/kinematics.py)), programmatic sensor rigging (planar 360° LiDAR), and in-memory URDF synthesis ([`generate_robot_urdf`](file:///home/robopi/simulation/nav_arena/nav_arena/embodiments/urdf.py)). Completely decoupled from ROS 2 middleware dependencies.
 - **Tasks ([`nav_arena.tasks`](file:///home/robopi/simulation/nav_arena/nav_arena/tasks/point_nav.py))**: RL and benchmark task definitions ([`PointNavTask`](file:///home/robopi/simulation/nav_arena/nav_arena/tasks/point_nav.py) extending Isaac Lab's `ManagerBasedRLEnv`), goal sampling, timeout handling, and chassis-isolated contact metrics.
 - **Scenes ([`nav_arena.scenes`](file:///home/robopi/simulation/nav_arena/nav_arena/scenes/interior_agent.py))**: Non-destructive USD scene conditioning using composition delta layers (`subLayerPaths`), automatic doorway clearing, and static triangle BVH generation for InteriorAgent assets.
-- **Methods ([`nav_arena.methods`](file:///home/robopi/simulation/nav_arena/nav_arena/methods/nav2/))**: Navigation baselines and integration launch infrastructure, including Nav2 lifecycle orchestrators and tuned parameter configurations.
+- **Methods ([`nav_arena.methods`](file:///home/robopi/simulation/nav_arena/nav_arena/methods/))**: Navigation baselines, split by how they execute. [`in_process/`](file:///home/robopi/simulation/nav_arena/nav_arena/methods/in_process/) holds policies run directly in the simulation process (the `InProcessPolicy` contract, a shared path follower, a policy registry, and adapters for the NavDP-family learned baselines: iPlanner, ViNT, NavDP, VIPlanner, X-NavDP). [`ros2/`](file:///home/robopi/simulation/nav_arena/nav_arena/methods/ros2/) holds external ROS 2 stacks, including the Nav2 bringup launch files and tuned parameters.
 - **ROS 2 Bridges ([`nav_arena.ros2`](file:///home/robopi/simulation/nav_arena/nav_arena/ros2/))**: Zero-latency OmniGraph nodes for simulation clock (`/clock`), odometry (`/odom`), and TF (`map -> odom -> base_link`), coupled with asynchronous Python nodes ([`LaserScanPublisherNode`](file:///home/robopi/simulation/nav_arena/nav_arena/ros2/sensors.py), [`TaskStatePublisherNode`](file:///home/robopi/simulation/nav_arena/nav_arena/ros2/state_publisher.py)), action adapters ([`TwistActionAdapter`](file:///home/robopi/simulation/nav_arena/nav_arena/ros2/adapters/action_adapter.py)), and background executors ([`BackgroundRos2Executor`](file:///home/robopi/simulation/nav_arena/nav_arena/ros2/executor.py)).
 - **Tools ([`nav_arena.tools`](file:///home/robopi/simulation/nav_arena/nav_arena/tools/map_generator.py))**: Standalone offline utilities, including programmatic 2D occupancy grid generation from USD collision geometry.
 - **Utilities ([`nav_arena.utils`](file:///home/robopi/simulation/nav_arena/nav_arena/utils/))**: Shared cross-cutting infrastructure: unified structured logging ([`ArenaLogger`](file:///home/robopi/simulation/nav_arena/nav_arena/utils/logger.py)), robust subprocess lifecycle management ([`managed_process`](file:///home/robopi/simulation/nav_arena/nav_arena/utils/process.py)), workspace-relative path resolution ([`paths.py`](file:///home/robopi/simulation/nav_arena/nav_arena/utils/paths.py)), and simulation mock helpers ([`create_mock_env`](file:///home/robopi/simulation/nav_arena/nav_arena/utils/sim.py)).
@@ -184,6 +204,8 @@ nav_arena/
 ├── pyproject.toml                     # Package specification (editable pip install)
 ├── README.md                          # Project documentation and architecture guide
 ├── CONTRIBUTING.md                    # Developer guidelines, primitives, and invariants
+├── requirements/                      # Pinned, --no-deps dependency lists for the learned baselines
+├── docs/                              # Integration notes and decision logs
 ├── cache/                             # Generated runtime caches (git-ignored)
 │   ├── maps/                          # Cached 2D occupancy grids (PNG + YAML)
 │   └── scenes/                        # Conditioned USD delta layers (e.g. open_doors)
@@ -199,7 +221,13 @@ nav_arena/
 │   │   ├── sensors.py                 # Planar 2D LiDAR raycaster and RGB-D pinhole camera configuration
 │   │   └── urdf.py                    # Programmatic URDF string synthesis
 │   ├── methods/                       # Autonomy baselines and external stacks
-│   │   └── nav2/                      # Nav2 bringup launch scripts, parameters, URDF bridge
+│   │   ├── in_process/                # Policies run inside the simulation process (no ROS 2)
+│   │   │   ├── base.py                # InProcessPolicy contract, PolicyObservation, Plan
+│   │   │   ├── controller.py          # Frame transforms and shared lookahead path follower
+│   │   │   ├── registry.py            # get_policy / list_policies / register_policy
+│   │   │   └── navdp_adapter/         # iPlanner, ViNT, NavDP, VIPlanner, X-NavDP adapters over NavDP
+│   │   └── ros2/
+│   │       └── nav2/                  # Nav2 bringup launch scripts, parameters, URDF bridge
 │   ├── ros2/                          # Core ROS 2 Integration Architecture
 │   │   ├── adapters/                  # Action adapters (TwistActionAdapter for /cmd_vel)
 │   │   ├── executor.py                # BackgroundRos2Executor (dedicated worker thread)
