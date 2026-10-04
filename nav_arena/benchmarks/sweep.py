@@ -219,98 +219,135 @@ class SweepSpec:
         return cls.from_yaml(content)
 
 
+def _is_finite_number(value: Any) -> bool:
+    return not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(value)
+
+
+def _validate_text(label: str, value: Any) -> None:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{label} must be a non-empty string, got '{value}'")
+
+
+def _validate_point(route: dict[str, Any], key: str) -> None:
+    value = route.get(key)
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        raise ValueError(f"Inline route '{route.get('name')}' must specify '{key}' as [x, y]")
+    if not all(_is_finite_number(x) for x in value):
+        raise ValueError(f"Inline route '{route.get('name')}' {key} coordinates must be finite numbers")
+
+
+def _validate_route_entry(route: Any) -> None:
+    if isinstance(route, str):
+        if not route.strip():
+            raise ValueError(f"Route name string cannot be empty: '{route}'")
+    elif isinstance(route, dict):
+        if not isinstance(route.get("name"), str) or not route["name"].strip():
+            raise ValueError(f"Inline route must specify non-empty 'name', got {route}")
+        _validate_point(route, "spawn")
+        _validate_point(route, "goal")
+        if "spawn_yaw" in route and not _is_finite_number(route["spawn_yaw"]):
+            raise ValueError(f"Inline route '{route['name']}' spawn_yaw must be a finite number")
+    else:
+        raise ValueError(f"Route entry must be a string or a dict, got {type(route).__name__}")
+
+
+def _validate_axes(spec: SweepSpec) -> None:
+    """Validate the matrix axes: robots, methods, routes, seeds."""
+    if not isinstance(spec.robots, list) or not spec.robots:
+        raise ValueError("Sweep robots must be a non-empty list of robot names")
+    for robot in spec.robots:
+        _validate_text("Each robot in robots", robot)
+
+    if not isinstance(spec.methods, list) or not spec.methods:
+        raise ValueError("Sweep methods must be a non-empty list of method names")
+    for method in spec.methods:
+        if method not in VALID_METHODS:
+            raise ValueError(f"Invalid method '{method}' in sweep methods. Expected one of: {VALID_METHODS}")
+
+    if not isinstance(spec.routes, list) or not spec.routes:
+        raise ValueError("Sweep routes must be a non-empty list of route names or definitions")
+    for route in spec.routes:
+        _validate_route_entry(route)
+
+    if not isinstance(spec.seeds, list) or not spec.seeds:
+        raise ValueError("Sweep seeds must be a non-empty list of integers")
+    for seed in spec.seeds:
+        if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
+            raise ValueError(f"Seed must be a non-negative integer, got '{seed}'")
+
+
+def _validate_options(options: Any) -> None:
+    if not isinstance(options, dict):
+        raise ValueError(f"Sweep options must be a dict, got {type(options).__name__}")
+    # (option names, label, minimum allowed (exclusive for positive), kind)
+    for names, label, positive in (
+        (("goal_tolerance", "goal_dist"), "options.goal_tolerance", True),
+        (("max_speed",), "options.max_speed", True),
+        (("stall_timeout_s", "stall_timeout"), "options.stall_timeout_s", False),
+    ):
+        present = [n for n in names if n in options]
+        if present:
+            value = options[present[0]]
+            if not _is_finite_number(value) or (value <= 0 if positive else value < 0):
+                kind = "a positive number" if positive else "a non-negative number"
+                raise ValueError(f"{label} must be {kind}, got {value}")
+    if "max_steps" in options:
+        steps = options["max_steps"]
+        if isinstance(steps, bool) or not isinstance(steps, int) or steps <= 0:
+            raise ValueError(f"options.max_steps must be a positive integer, got {steps}")
+
+
 def validate_sweep_spec(spec: SweepSpec) -> None:
     """Validate a SweepSpec for consistency and bounds.
 
     Raises:
         ValueError: If validation fails.
     """
-    if not isinstance(spec.name, str) or not spec.name.strip():
-        raise ValueError(f"Sweep name must be a non-empty string, got '{spec.name}'")
-
-    if not isinstance(spec.scene, str) or not spec.scene.strip():
-        raise ValueError(f"Sweep scene must be a non-empty string, got '{spec.scene}'")
-
-    if not isinstance(spec.robots, list) or not spec.robots:
-        raise ValueError("Sweep robots must be a non-empty list of robot names")
-    for r in spec.robots:
-        if not isinstance(r, str) or not r.strip():
-            raise ValueError(f"Each robot in robots must be a non-empty string, got '{r}'")
-
-    if not isinstance(spec.methods, list) or not spec.methods:
-        raise ValueError("Sweep methods must be a non-empty list of method names")
-    for m in spec.methods:
-        if m not in VALID_METHODS:
-            raise ValueError(f"Invalid method '{m}' in sweep methods. Expected one of: {VALID_METHODS}")
-
-    if not isinstance(spec.routes, list) or not spec.routes:
-        raise ValueError("Sweep routes must be a non-empty list of route names or definitions")
-    for r in spec.routes:
-        if isinstance(r, str):
-            if not r.strip():
-                raise ValueError(f"Route name string cannot be empty: '{r}'")
-        elif isinstance(r, dict):
-            if "name" not in r or not isinstance(r["name"], str) or not r["name"].strip():
-                raise ValueError(f"Inline route must specify non-empty 'name', got {r}")
-            if "spawn" not in r or not isinstance(r["spawn"], (list, tuple)) or len(r["spawn"]) != 2:
-                raise ValueError(f"Inline route '{r.get('name')}' must specify 'spawn' as [x, y]")
-            if not all(isinstance(x, (int, float)) and math.isfinite(x) for x in r["spawn"]):
-                raise ValueError(f"Inline route '{r.get('name')}' spawn coordinates must be finite numbers")
-            if "goal" not in r or not isinstance(r["goal"], (list, tuple)) or len(r["goal"]) != 2:
-                raise ValueError(f"Inline route '{r.get('name')}' must specify 'goal' as [x, y]")
-            if not all(isinstance(x, (int, float)) and math.isfinite(x) for x in r["goal"]):
-                raise ValueError(f"Inline route '{r.get('name')}' goal coordinates must be finite numbers")
-            if "spawn_yaw" in r:
-                yaw = r["spawn_yaw"]
-                if isinstance(yaw, bool) or not isinstance(yaw, (int, float)) or not math.isfinite(yaw):
-                    raise ValueError(f"Inline route '{r.get('name')}' spawn_yaw must be a finite number")
-        else:
-            raise ValueError(f"Route entry must be a string or a dict, got {type(r).__name__}")
-
-    if not isinstance(spec.seeds, list) or not spec.seeds:
-        raise ValueError("Sweep seeds must be a non-empty list of integers")
-    for s in spec.seeds:
-        if isinstance(s, bool) or not isinstance(s, int) or s < 0:
-            raise ValueError(f"Seed must be a non-negative integer, got '{s}'")
-
-    if not isinstance(spec.options, dict):
-        raise ValueError(f"Sweep options must be a dict, got {type(spec.options).__name__}")
-
-    # Check known options
-    if "goal_tolerance" in spec.options or "goal_dist" in spec.options:
-        gt = spec.options.get("goal_tolerance", spec.options.get("goal_dist"))
-        if isinstance(gt, bool) or not isinstance(gt, (int, float)) or not math.isfinite(gt) or gt <= 0:
-            raise ValueError(f"options.goal_tolerance must be a positive number, got {gt}")
-
-    if "max_speed" in spec.options:
-        ms = spec.options["max_speed"]
-        if isinstance(ms, bool) or not isinstance(ms, (int, float)) or not math.isfinite(ms) or ms <= 0:
-            raise ValueError(f"options.max_speed must be a positive number, got {ms}")
-
-    if "max_steps" in spec.options:
-        st = spec.options["max_steps"]
-        if isinstance(st, bool) or not isinstance(st, int) or st <= 0:
-            raise ValueError(f"options.max_steps must be a positive integer, got {st}")
-
-    if "stall_timeout_s" in spec.options or "stall_timeout" in spec.options:
-        to = spec.options.get("stall_timeout_s", spec.options.get("stall_timeout"))
-        if isinstance(to, bool) or not isinstance(to, (int, float)) or not math.isfinite(to) or to < 0:
-            raise ValueError(f"options.stall_timeout_s must be a non-negative number, got {to}")
+    _validate_text("Sweep name", spec.name)
+    _validate_text("Sweep scene", spec.scene)
+    _validate_axes(spec)
+    _validate_options(spec.options)
 
     if not isinstance(spec.method_params, dict):
         raise ValueError(f"Sweep method_params must be a dict, got {type(spec.method_params).__name__}")
-    for m, p in spec.method_params.items():
-        if not isinstance(p, dict):
-            raise ValueError(f"method_params for method '{m}' must be a dict, got {type(p).__name__}")
+    for method, params in spec.method_params.items():
+        if not isinstance(params, dict):
+            raise ValueError(f"method_params for method '{method}' must be a dict, got {type(params).__name__}")
 
-    if spec.timeout_s is not None:
-        if (
-            isinstance(spec.timeout_s, bool)
-            or not isinstance(spec.timeout_s, (int, float))
-            or not math.isfinite(spec.timeout_s)
-            or spec.timeout_s <= 0
-        ):
-            raise ValueError(f"timeout_s must be a positive number, got {spec.timeout_s}")
+    if spec.timeout_s is not None and (not _is_finite_number(spec.timeout_s) or spec.timeout_s <= 0):
+        raise ValueError(f"timeout_s must be a positive number, got {spec.timeout_s}")
+
+
+def _as_list(value: Any) -> list[Any]:
+    """A comma-separated string or any iterable as a list (strings are stripped; empty items dropped)."""
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    return [value]
+
+
+_AXIS_OVERRIDES = {  # key -> (field, flag, log level, converter)
+    "name": ("name", "--name", "info", str),
+    "scene": ("scene", "--scene", "warning", str),
+    "robots": ("robots", "--robots", "warning", lambda v: [str(x) for x in _as_list(v)]),
+    "methods": ("methods", "--methods", "warning", lambda v: [str(x) for x in _as_list(v)]),
+    "routes": ("routes", "--routes", "info", _as_list),
+    "seeds": ("seeds", "--seeds", "info", lambda v: [int(x) for x in _as_list(v)]),
+    "timeout_s": ("timeout_s", "--timeout", "info", float),
+}
+_AXIS_ALIASES = {"robot": "robots", "method": "methods", "route": "routes", "seed": "seeds", "timeout": "timeout_s"}
+_OPTION_OVERRIDES = {
+    "max_steps": "max_steps",
+    "goal_dist": "goal_tolerance",
+    "goal_tolerance": "goal_tolerance",
+    "max_speed": "max_speed",
+    "stall_timeout": "stall_timeout_s",
+    "stall_timeout_s": "stall_timeout_s",
+    "gui": "gui",
+    "follow_camera": "follow_camera",
+    "goal_overlay": "goal_overlay",
+}
 
 
 def apply_sweep_overrides(
@@ -329,85 +366,33 @@ def apply_sweep_overrides(
         Updated SweepSpec copy.
     """
     updated = copy.deepcopy(spec)
-
-    for key, val in overrides.items():
-        if val is None:
+    for raw_key, value in overrides.items():
+        if value is None:
             continue
-
-        if key == "name":
-            if logger and updated.name != val:
-                logger.info("--name overrides spec.name: '%s' -> '%s'", updated.name, val)
-            updated.name = str(val)
-
-        elif key == "scene":
-            if logger and updated.scene != val:
-                logger.warning("--scene overrides spec.scene: '%s' -> '%s'", updated.scene, val)
-            updated.scene = str(val)
-
-        elif key in ("robots", "robot"):
-            if isinstance(val, str):
-                robots_list = [r.strip() for r in val.split(",") if r.strip()]
-            else:
-                robots_list = [str(r) for r in val]
-            if logger and updated.robots != robots_list:
-                logger.warning("--robots overrides spec.robots: %s -> %s", updated.robots, robots_list)
-            updated.robots = robots_list
-
-        elif key in ("methods", "method"):
-            if isinstance(val, str):
-                methods_list = [m.strip() for m in val.split(",") if m.strip()]
-            else:
-                methods_list = [str(m) for m in val]
-            if logger and updated.methods != methods_list:
-                logger.warning("--methods overrides spec.methods: %s -> %s", updated.methods, methods_list)
-            updated.methods = methods_list
-
-        elif key in ("routes", "route"):
-            if isinstance(val, str):
-                routes_list = [r.strip() for r in val.split(",") if r.strip()]
-            else:
-                routes_list = list(val)
-            if logger and updated.routes != routes_list:
-                logger.info("--routes overrides spec.routes: %s -> %s", updated.routes, routes_list)
-            updated.routes = routes_list
-
-        elif key in ("seeds", "seed"):
-            if isinstance(val, str):
-                seeds_list = [int(s.strip()) for s in val.split(",") if s.strip()]
-            elif isinstance(val, (list, tuple)):
-                seeds_list = [int(s) for s in val]
-            else:
-                seeds_list = [int(val)]
-            if logger and updated.seeds != seeds_list:
-                logger.info("--seeds overrides spec.seeds: %s -> %s", updated.seeds, seeds_list)
-            updated.seeds = seeds_list
-
-        elif key in ("timeout_s", "timeout"):
-            timeout_val = float(val)
-            if logger and updated.timeout_s != timeout_val:
-                logger.info("--timeout overrides spec.timeout_s: %s -> %s", updated.timeout_s, timeout_val)
-            updated.timeout_s = timeout_val
-
-        elif key in ("max_steps", "goal_dist", "goal_tolerance", "max_speed", "stall_timeout", "stall_timeout_s", "gui", "follow_camera", "goal_overlay"):
-            opt_key = "goal_tolerance" if key == "goal_dist" else ("stall_timeout_s" if key == "stall_timeout" else key)
-            old_val = updated.options.get(opt_key)
-            if logger and old_val != val:
-                logger.info("--%s overrides spec.options.%s: %s -> %s", key, opt_key, old_val, val)
-            updated.options[opt_key] = val
-
-        elif key == "options" and isinstance(val, dict):
-            for ok, ov in val.items():
-                old_val = updated.options.get(ok)
-                if logger and old_val != ov:
-                    logger.info("options.%s overridden: %s -> %s", ok, old_val, ov)
-                updated.options[ok] = ov
-
-        elif key == "method_params" and isinstance(val, dict):
-            for mk, mv in val.items():
-                if mk not in updated.method_params:
-                    updated.method_params[mk] = {}
-                updated.method_params[mk].update(mv)
-
+        key = _AXIS_ALIASES.get(raw_key, raw_key)
+        if key in _AXIS_OVERRIDES:
+            field_name, flag, level, convert = _AXIS_OVERRIDES[key]
+            new = convert(value)
+            old = getattr(updated, field_name)
+            if logger and old != new:
+                fmt = "%s overrides spec.%s: '%s' -> '%s'" if isinstance(new, str) else "%s overrides spec.%s: %s -> %s"
+                getattr(logger, level)(fmt, flag, field_name, old, new)
+            setattr(updated, field_name, new)
+        elif raw_key in _OPTION_OVERRIDES:
+            name = _OPTION_OVERRIDES[raw_key]
+            old = updated.options.get(name)
+            if logger and old != value:
+                logger.info("--%s overrides spec.options.%s: %s -> %s", raw_key, name, old, value)
+            updated.options[name] = value
+        elif raw_key == "options" and isinstance(value, dict):
+            for name, option_value in value.items():
+                old = updated.options.get(name)
+                if logger and old != option_value:
+                    logger.info("options.%s overridden: %s -> %s", name, old, option_value)
+                updated.options[name] = option_value
+        elif raw_key == "method_params" and isinstance(value, dict):
+            for method, params in value.items():
+                updated.method_params.setdefault(method, {}).update(params)
     return updated
 
 
