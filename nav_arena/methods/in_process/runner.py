@@ -66,9 +66,43 @@ class EpisodeCfg:
     """Optional viewport overlay with ``update(path_xy, stop, z)`` and ``clear()`` (see
     :class:`nav_arena.utils.viewer.DebugOverlay`). It draws the goal and each new plan without touching the scene, so the
     sensor cameras never see it."""
-    viewer_render_hz: float = 15.0
+    viewer_render_hz: float = 10.0
     """With a viewer, extra display renders per simulated second so the GUI stays smooth and responsive even though
-    sensor rendering is only a few Hz."""
+    sensor rendering is only a few Hz. Each display render costs ~3x a plain step, so higher rates slow the run."""
+    pace: bool = False
+    """Hold every step to one uniform wall-clock duration (see :class:`StepPacer`) so GUI playback is even instead of
+    lurching between cheap physics steps and expensive render/plan steps. Never changes simulated behavior."""
+
+
+class StepPacer:
+    """Evens out wall-clock step times for viewing; simulated time and results are untouched.
+
+    Steps are paced to ``max(step_dt, smoothed average step cost)``: runs that can beat real time play at real time,
+    slower ones play at a steady slow-motion rate instead of alternating fast bursts and stalls.
+    """
+
+    def __init__(self, step_dt: float, smoothing: float = 0.05, clock=time.monotonic, sleep=time.sleep) -> None:
+        self.step_dt = step_dt
+        self.smoothing = smoothing
+        self._clock, self._sleep = clock, sleep
+        self._average = step_dt
+        self._deadline: float | None = None
+        self._last = clock()
+
+    def wait(self) -> None:
+        """Call once per step, after the step's work: sleeps until this step's paced deadline."""
+        now = self._clock()
+        cost = now - self._last
+        self._average += self.smoothing * (cost - self._average)
+        period = max(self.step_dt, self._average)
+        deadline = (self._last if self._deadline is None else self._deadline) + period
+        if deadline < now:
+            # Behind schedule (a one-off spike): absorb it rather than sprinting to catch up.
+            deadline = now
+        else:
+            self._sleep(deadline - now)
+        self._deadline = deadline
+        self._last = self._clock()
 
 
 @dataclass
@@ -216,6 +250,7 @@ def run_episode(task: Any, policy: InProcessPolicy, cfg: EpisodeCfg | None = Non
     next_progress = 0.0
     stall_ref_xy = prev_xy.copy()
     stall_ref_time = 0.0
+    pacer = StepPacer(step_dt) if cfg.pace else None
 
     for step in range(cfg.max_steps):
         x, y, yaw = task.get_robot_pose_w()
@@ -305,6 +340,8 @@ def run_episode(task: Any, policy: InProcessPolicy, cfg: EpisodeCfg | None = Non
         _, _, terminated, truncated, _ = task.step(torch.tensor([[v, w]], dtype=torch.float32, device=task.device))
         steps += 1
         sim_time += step_dt
+        if pacer is not None:
+            pacer.wait()
         if bool(terminated.any()) or bool(truncated.any()):
             terminal_cause = task.get_terminal_cause() or "time_out"
             break
@@ -336,4 +373,4 @@ def run_episode(task: Any, policy: InProcessPolicy, cfg: EpisodeCfg | None = Non
     return result
 
 
-__all__ = ["EpisodeCfg", "EpisodeResult", "run_episode"]
+__all__ = ["EpisodeCfg", "EpisodeResult", "StepPacer", "run_episode"]

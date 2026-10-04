@@ -68,6 +68,19 @@ parser.add_argument(
     "stop). Drawn as a UI layer over the viewport, so the policy's cameras cannot see it (default: on with --viz kit).",
 )
 parser.add_argument(
+    "--pace",
+    action=argparse.BooleanOptionalAction,
+    default=None,
+    help="Hold every step to a uniform wall-clock duration so GUI playback is smooth rather than lurching between "
+    "cheap and render-heavy steps. Never changes results (default: on with --viz kit).",
+)
+parser.add_argument(
+    "--viewer-render-hz",
+    type=float,
+    default=10.0,
+    help="Display renders per simulated second with a viewer; each costs ~3x a plain step, so lower is faster.",
+)
+parser.add_argument(
     "--show-goal-marker",
     action="store_true",
     help="Draw Isaac Lab's goal arrow as scene geometry. WARNING: the policy's cameras see it and treat it as an "
@@ -179,6 +192,8 @@ def run_verification():
         output_dir=output,
         viewer=viewer,
         overlay=overlay,
+        pace=args_cli.pace if args_cli.pace is not None else GUI,
+        viewer_render_hz=args_cli.viewer_render_hz,
         stall_timeout_s=args_cli.stall_timeout if args_cli.stall_timeout > 0 else None,
     )
     result = run_episode(task, policy, episode)
