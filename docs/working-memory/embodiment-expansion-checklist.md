@@ -7,7 +7,7 @@ Update this file in the same commit as the work it describes, so it always match
 - **Rules:** commit locally, never push (the user pushes). Headless sims via `./agy_python.sh` are OK; GUI checks
   and the Nav2 regression are the user's. Install packages only into `env_isaaclab` with `uv pip --no-deps`.
 - **Last updated:** 2026-10-04
-- **Next action:** Phase 1 step 5 (roller-jitter check in `verify_embodiment`; run headless via `./agy_python.sh`)
+- **Next action:** Phase 1 step 7 (`tests/integration/test_integration_kaya.py`)
 
 ## Phase 0: drive-agnostic base (diff-drive results must not change)
 
@@ -52,8 +52,8 @@ Update this file in the same commit as the work it describes, so it always match
 - [x] 2b. `WheelGeometry` dataclass + `read_wheel_geometry()` in `wheel_geometry.py`; reads `isaacmecanumwheel:*` attrs and joint frames from the live USD stage — no hand-copied numbers; 9 unit tests in `test_wheel_geometry.py` (committed)
 - [x] 3. `HolonomicDriveAction` / `HolonomicDriveActionCfg` in `actions.py`: resolves wheel joints, reads USD geometry at construction (or takes a `WheelGeometry` from config), clips per-axis, writes joint velocity targets (committed)
 - [x] 4. `embodiments/kaya.py` with variants `kaya.mast` (default) and `kaya.native`; register and export (committed)
-- [ ] 5. Roller-jitter check in `verify_embodiment`; derived USD only if needed
-- [ ] 6. Per-axis drive check in `verify_embodiment.py` (forward, strafe, rotate)
+- [x] 5. Roller-jitter check in `verify_embodiment`: zero-command drift < 0.004 m over 1.0s; tuned wheel damping to USD authored 174.5 (committed)
+- [x] 6. Per-axis drive check in `verify_embodiment.py` (forward, strafe, rotate) (committed)
 - [ ] 7. `tests/integration/test_integration_kaya.py` (includes the `HolonomicController` cross-check)
 - [ ] 8. Closed loop `verify_baseline` for kaya vs nova_carter
 - [ ] Docs updated; Phase 1 committed

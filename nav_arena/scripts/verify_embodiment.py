@@ -197,28 +197,61 @@ def run_verification(simulation_app):
             step += 1
         return
 
-    # Standard non-loop test run
-    # Test driving forward with body twist [vx=0.5 m/s, vy=0.0 m/s, wz=0.0 rad/s]
-    action = torch.tensor([[0.5, 0.0, 0.0]], device=sim.device)
+    # Drive check driven by drive_type
+    dt = sim.get_physics_dt()
 
-    logger.info("Stepping simulation with twist [vx=0.5 m/s, vy=0.0 m/s, wz=0.0 rad/s] for 60 steps...")
-    for step in range(60):
-        # Process and apply action through ActionManager
-        action_manager.process_action(action)
-        action_manager.apply_action()
+    def run_twist_cmd(cmd_list, num_steps):
+        action_t = torch.tensor([cmd_list], device=sim.device)
+        for _ in range(num_steps):
+            action_manager.process_action(action_t)
+            action_manager.apply_action()
+            scene.write_data_to_sim()
+            sim.step()
+            scene.update(dt=dt)
 
-        # Step physics
-        scene.write_data_to_sim()
-        sim.step()
-        scene.update(dt=sim.get_physics_dt())
+    def extract_yaw(q):
+        # root_quat_w is (w, x, y, z)
+        w, x, y, z = q[0].item(), q[1].item(), q[2].item(), q[3].item()
+        import math
+        return math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
 
-    final_pos_x = robot.data.root_pos_w[0, 0].item()
-    displacement_x = final_pos_x - init_pos_x
-    logger.info(f"Final robot X position: {final_pos_x:.4f} m (displacement: {displacement_x:.4f} m)")
+    # 1. Forward motion test (+vx)
+    vx_cmd = min(0.5, embodiment.max_linear_speed)
+    steps_vx = 60
+    logger.info(f"Testing forward drive: twist [vx={vx_cmd} m/s, vy=0.0, wz=0.0] for {steps_vx} steps...")
+    p0 = robot.data.root_pos_w[0].clone()
+    run_twist_cmd([vx_cmd, 0.0, 0.0], steps_vx)
+    p_after_vx = robot.data.root_pos_w[0].clone()
+    disp_x = (p_after_vx[0] - p0[0]).item()
+    logger.info(f"Forward displacement: {disp_x:.4f} m (expected > 0.05 m)")
+    assert disp_x > 0.05, f"Robot failed to drive forward: displacement was {disp_x:.4f} m"
+    logger.check(f"{type(action_manager._terms['robot_action']).__name__} forward drive", disp_x > 0.05, f"disp_x={disp_x:.4f} m")
 
-    # Check that robot actually moved forward
-    assert displacement_x > 0.05, f"Robot failed to drive forward: displacement was {displacement_x:.4f} m"
-    logger.check("DifferentialDriveAction commanded wheel joints", displacement_x > 0.05, f"displacement={displacement_x:.4f} m")
+    # 2. Holonomic strafe motion test (+vy)
+    if embodiment.drive_type == "holonomic":
+        vy_cmd = min(0.3, embodiment.max_lateral_speed)
+        steps_vy = 100
+        logger.info(f"Testing holonomic strafe: twist [vx=0.0, vy={vy_cmd} m/s, wz=0.0] for {steps_vy} steps...")
+        p_pre_vy = robot.data.root_pos_w[0].clone()
+        run_twist_cmd([0.0, vy_cmd, 0.0], steps_vy)
+        p_after_vy = robot.data.root_pos_w[0].clone()
+        disp_y = (p_after_vy[1] - p_pre_vy[1]).item()
+        logger.info(f"Lateral displacement: {disp_y:.4f} m (expected > 0.05 m)")
+        assert disp_y > 0.05, f"Holonomic robot failed to strafe: lateral displacement was {disp_y:.4f} m"
+        logger.check("Holonomic strafe drive", disp_y > 0.05, f"disp_y={disp_y:.4f} m")
+
+        # 3. Rotation test (+wz)
+        wz_cmd = min(1.0, embodiment.max_angular_speed)
+        steps_wz = 100
+        logger.info(f"Testing rotation: twist [vx=0.0, vy=0.0, wz={wz_cmd} rad/s] for {steps_wz} steps...")
+        q_pre_wz = robot.data.root_quat_w[0].clone()
+        run_twist_cmd([0.0, 0.0, wz_cmd], steps_wz)
+        q_after_wz = robot.data.root_quat_w[0].clone()
+        dyaw = extract_yaw(q_after_wz) - extract_yaw(q_pre_wz)
+        wz_meas = robot.data.root_ang_vel_w[0, 2].item()
+        logger.info(f"Rotation result: yaw change={dyaw:.4f} rad, current wz={wz_meas:.4f} rad/s")
+        assert wz_meas > 0.5 * wz_cmd or dyaw > 0.2, f"Robot failed to rotate: wz={wz_meas:.4f} rad/s, dyaw={dyaw:.4f} rad"
+        logger.check("Holonomic rotation drive", wz_meas > 0.5 * wz_cmd or dyaw > 0.2, f"wz={wz_meas:.4f} rad/s, dyaw={dyaw:.4f} rad")
 
     # Check that LiDAR sensor updated
     ray_hits = lidar.data.ray_hits_w
