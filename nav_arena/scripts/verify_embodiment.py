@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 import torch
 
@@ -111,7 +112,10 @@ def run_verification(simulation_app):
         )
 
         # Embodiment articulation
-        robot = embodiment.articulation_cfg.replace(prim_path="{ENV_REGEX_NS}/Robot")
+        robot = embodiment.articulation_cfg.replace(
+            prim_path="{ENV_REGEX_NS}/Robot",
+            init_state=embodiment.articulation_cfg.init_state.replace(pos=(0.0, 0.0, embodiment.spawn_height)),
+        )
 
         # 2D LiDAR
         lidar = create_2d_lidar_cfg(
@@ -167,9 +171,6 @@ def run_verification(simulation_app):
     # Position camera to frame the robot nicely
     sim.set_camera_view(eye=[2.5, -2.5, 1.8], target=[0.0, 0.0, 0.3])
 
-    init_pos_x = robot.data.root_pos_w[0, 0].item()
-    logger.info(f"Initial robot X position: {init_pos_x:.4f} m")
-
     if args_cli.loop:
         logger.info("Running in continuous loop for livestream inspection. Press Ctrl+C to terminate.")
         step = 0
@@ -197,61 +198,72 @@ def run_verification(simulation_app):
             step += 1
         return
 
-    # Drive check driven by drive_type
+    # Drive checks (per axis, driven by the embodiment's limits). The pass/fail rules live in nav_arena.utils.drive_check.
+    from nav_arena.utils.drive_check import evaluate_hold, evaluate_segment, measure_segment, wrap_angle, yaw_from_quat_xyzw
+
     dt = sim.get_physics_dt()
 
-    def run_twist_cmd(cmd_list, num_steps):
-        action_t = torch.tensor([cmd_list], device=sim.device)
-        for _ in range(num_steps):
+    def run(command, seconds):
+        action_t = torch.tensor([command], device=sim.device)
+        for _ in range(max(1, round(seconds / dt))):
             action_manager.process_action(action_t)
             action_manager.apply_action()
             scene.write_data_to_sim()
             sim.step()
             scene.update(dt=dt)
 
-    def extract_yaw(q):
-        # root_quat_w is (w, x, y, z)
-        w, x, y, z = q[0].item(), q[1].item(), q[2].item(), q[3].item()
-        import math
-        return math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+    def pose():
+        position = robot.data.root_pos_w[0]
+        return (float(position[0]), float(position[1])), yaw_from_quat_xyzw([float(v) for v in robot.data.root_quat_w[0]])
 
-    # 1. Forward motion test (+vx)
-    vx_cmd = min(0.5, embodiment.max_linear_speed)
-    steps_vx = 60
-    logger.info(f"Testing forward drive: twist [vx={vx_cmd} m/s, vy=0.0, wz=0.0] for {steps_vx} steps...")
-    p0 = robot.data.root_pos_w[0].clone()
-    run_twist_cmd([vx_cmd, 0.0, 0.0], steps_vx)
-    p_after_vx = robot.data.root_pos_w[0].clone()
-    disp_x = (p_after_vx[0] - p0[0]).item()
-    logger.info(f"Forward displacement: {disp_x:.4f} m (expected > 0.05 m)")
-    assert disp_x > 0.05, f"Robot failed to drive forward: displacement was {disp_x:.4f} m"
-    logger.check(f"{type(action_manager._terms['robot_action']).__name__} forward drive", disp_x > 0.05, f"disp_x={disp_x:.4f} m")
+    def segment(command, warmup_s=0.5, measure_s=1.0, brake_s=0.5):
+        run(command, warmup_s)
+        start_xy, start_yaw = pose()
+        run(command, measure_s / 2.0)
+        mid_xy, mid_yaw = pose()
+        run(command, measure_s / 2.0)
+        end_xy, end_yaw = pose()
+        run([0.0, 0.0, 0.0], brake_s)
+        return measure_segment(command, start_xy, start_yaw, end_xy, end_yaw, measure_s, mid_xy, mid_yaw)
 
-    # 2. Holonomic strafe motion test (+vy)
-    if embodiment.drive_type == "holonomic":
-        vy_cmd = min(0.3, embodiment.max_lateral_speed)
-        steps_vy = 100
-        logger.info(f"Testing holonomic strafe: twist [vx=0.0, vy={vy_cmd} m/s, wz=0.0] for {steps_vy} steps...")
-        p_pre_vy = robot.data.root_pos_w[0].clone()
-        run_twist_cmd([0.0, vy_cmd, 0.0], steps_vy)
-        p_after_vy = robot.data.root_pos_w[0].clone()
-        disp_y = (p_after_vy[1] - p_pre_vy[1]).item()
-        logger.info(f"Lateral displacement: {disp_y:.4f} m (expected > 0.05 m)")
-        assert disp_y > 0.05, f"Holonomic robot failed to strafe: lateral displacement was {disp_y:.4f} m"
-        logger.check("Holonomic strafe drive", disp_y > 0.05, f"disp_y={disp_y:.4f} m")
+    def settle(max_s=8.0, window_s=0.5, still_windows=2, max_shift=0.002, max_turn=0.005):
+        """Hold a zero command until the pose stops changing (the spawn drop makes some robots bounce and shift).
 
-        # 3. Rotation test (+wz)
-        wz_cmd = min(1.0, embodiment.max_angular_speed)
-        steps_wz = 100
-        logger.info(f"Testing rotation: twist [vx=0.0, vy=0.0, wz={wz_cmd} rad/s] for {steps_wz} steps...")
-        q_pre_wz = robot.data.root_quat_w[0].clone()
-        run_twist_cmd([0.0, 0.0, wz_cmd], steps_wz)
-        q_after_wz = robot.data.root_quat_w[0].clone()
-        dyaw = extract_yaw(q_after_wz) - extract_yaw(q_pre_wz)
-        wz_meas = robot.data.root_ang_vel_w[0, 2].item()
-        logger.info(f"Rotation result: yaw change={dyaw:.4f} rad, current wz={wz_meas:.4f} rad/s")
-        assert wz_meas > 0.5 * wz_cmd or dyaw > 0.2, f"Robot failed to rotate: wz={wz_meas:.4f} rad/s, dyaw={dyaw:.4f} rad"
-        logger.check("Holonomic rotation drive", wz_meas > 0.5 * wz_cmd or dyaw > 0.2, f"wz={wz_meas:.4f} rad/s, dyaw={dyaw:.4f} rad")
+        Stillness is judged on the pose over whole windows, not on the instantaneous velocity, which chatters for
+        robots with many contacts (Kaya's rollers) and made the check pass or fail from run to run.
+        """
+        quiet, elapsed = 0, 0.0
+        last_xy, last_yaw = pose()
+        while elapsed < max_s:
+            run([0.0, 0.0, 0.0], window_s)
+            elapsed += window_s
+            xy, yaw = pose()
+            moved = math.dist(xy, last_xy) > max_shift or abs(wrap_angle(yaw - last_yaw)) > max_turn
+            quiet = 0 if moved else quiet + 1
+            last_xy, last_yaw = xy, yaw
+            if quiet >= still_windows:
+                return elapsed
+        return None
+
+    settle_s = settle()
+    logger.check("Robot settles after spawn", settle_s is not None, f"still after {settle_s:.2f} s" if settle_s else "still moving after 8 s")
+    assert settle_s is not None, "Robot never came to rest after spawning"
+    passed, detail = evaluate_hold(segment([0.0, 0.0, 0.0], warmup_s=0.0, brake_s=0.0))
+    logger.check("Zero-command hold", passed, detail)
+    assert passed, f"Robot moved without a command: {detail}"
+
+    drive_name = type(action_manager._terms["robot_action"]).__name__
+    commands = [("Forward drive (vx)", [min(0.3, embodiment.max_linear_speed), 0.0, 0.0])]
+    if embodiment.max_lateral_speed > 0.0:
+        commands.append(("Strafe drive (vy)", [0.0, min(0.3, embodiment.max_lateral_speed), 0.0]))
+    commands.append(("In-place rotation (wz)", [0.0, 0.0, min(1.0, embodiment.max_angular_speed)]))
+    for label, command in commands:
+        # A rotation is measured after a longer spin-up: swivel casters (Nova Carter) re-orient at the start of a turn,
+        # moving the turning centre by ~8 cm over the first second; after 1.5 s it holds within millimetres.
+        warmup_s = 1.5 if command[2] != 0.0 else 0.5
+        passed, detail = evaluate_segment(segment(command, warmup_s=warmup_s))
+        logger.check(f"{drive_name} {label}", passed, detail)
+        assert passed, f"{label} failed: {detail}"
 
     # Check that LiDAR sensor updated
     ray_hits = lidar.data.ray_hits_w
