@@ -42,11 +42,27 @@ Positive wheel rotation about the joint axis drives the robot along the rolling 
 
 ## Consequences for the embodiment
 
-- `/groundPlane/CollisionPlane` exists in the file but **outside** the default prim, so referencing the robot should not bring it in.
-  Verify in the simulator (a stray plane would hold the robot up or flip it); add a derived USD only if it shows up.
-- Wheels and rollers are separate rigid bodies that carry the floor's traction forces. The contact sensor must therefore stay on
-  `base_link` only (chassis colliders), with `ground_contact_on_body=False`; a sensor on the wheel bodies would read the traction
-  force as a collision.
+- `/groundPlane/CollisionPlane` exists in the file but **outside** the default prim, so referencing the robot does not bring it in
+  (confirmed: Kaya rests at its expected height in the simulator; no derived USD needed).
+- ~~The contact sensor must stay on `base_link`, because wheels would read traction as a collision.~~ **Superseded (2026-10-05):**
+  Isaac Lab's contact sensor reports normal forces only, not friction. Measured over 120 steps of driving and strafing, all 34 bodies
+  (chassis, 3 wheels, 30 rollers) read exactly 0 N horizontally, while the rollers carry the robot's weight vertically. So Kaya
+  senses all bodies (`contact_bodies=".*"`) with `ground_contact_on_body=True` (horizontal forces only), which also catches a
+  wheel or roller hitting a wall. Caveat: a sloped floor or a door sill tilts the floor normal and could read as a collision.
 - 33 DOF (3 driven + 30 passive): only the three axle joints get an actuator; roller joints keep the USD's free state.
 - Mount height for `kaya.mast`: 0.30 m above the floor (same viewpoint as the other robots) = `camera_offset` z of 0.30 - 0.091 = 0.209 m
   above `base_link`. For `kaya.native`: about (0.06, 0, 0.07) above base_link, pitched 20 degrees down.
+
+## Behaviour measured in the simulator (2026-10-05)
+
+- **Settling after spawn:** after the drop onto its wheels, Kaya shifts about 2 cm and turns about 2.4 degrees over the next
+  ~3.5 s. Observed in the GUI: the wheels turn one after another (front, front-left, then slowly the rear). Unconfirmed
+  hypothesis: the weight settles unevenly onto the rollers and the velocity drive (damping, no stiffness) resists speed but
+  does not hold position, so loaded wheels turn slowly until the load evens out. Spawning lower (0.10 m instead of 0.15 m) did not shorten it. Afterwards it holds
+  still to 0.1 mm. Instantaneous root velocity keeps chattering while the pose is still, so judge stillness on pose, not velocity.
+- **Drive accuracy** (`verify_embodiment`, body frame): forward 96% of command, strafe 97% (3 mm forward, 0.012 rad yaw per 0.29 m),
+  rotation 78% of command with a fixed turning centre (2 mm).
+- **Kinematics:** wheel speeds match Isaac Sim's `HolonomicController` to 4.8e-7 rad/s. Isaac's controller commands the centre of
+  mass (3 cm ahead of `base_link`); ours commands the `base_link` origin, the pose navigation tracks. The cross-check therefore
+  builds Isaac's controller with its command site at `base_link/control_offset` (identity, so the `base_link` origin).
+- **LiDAR** sits at the mast height, 0.30 m above the floor (`lidar_offset` z = 0.209 above `base_link`).

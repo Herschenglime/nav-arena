@@ -6,8 +6,8 @@ Update this file in the same commit as the work it describes, so it always match
 - **Branch:** `feat/embodiment-expansion` (from `main` after PR #1)
 - **Rules:** commit locally, never push (the user pushes). Headless sims via `./agy_python.sh` are OK; GUI checks
   and the Nav2 regression are the user's. Install packages only into `env_isaaclab` with `uv pip --no-deps`.
-- **Last updated:** 2026-10-04
-- **Next action:** Phase 1 step 7 (`tests/integration/test_integration_kaya.py`)
+- **Last updated:** 2026-10-05
+- **Next action:** Phase 2 step 1 (fetch and cache the Go2 policy, verify its SHA-256)
 
 ## Phase 0: drive-agnostic base (diff-drive results must not change)
 
@@ -52,13 +52,27 @@ Update this file in the same commit as the work it describes, so it always match
 - [x] 2b. `WheelGeometry` dataclass + `read_wheel_geometry()` in `wheel_geometry.py`; reads `isaacmecanumwheel:*` attrs and joint frames from the live USD stage — no hand-copied numbers; 9 unit tests in `test_wheel_geometry.py` (committed)
 - [x] 3. `HolonomicDriveAction` / `HolonomicDriveActionCfg` in `actions.py`: resolves wheel joints, reads USD geometry at construction (or takes a `WheelGeometry` from config), clips per-axis, writes joint velocity targets (committed)
 - [x] 4. `embodiments/kaya.py` with variants `kaya.mast` (default) and `kaya.native`; register and export (committed)
-- [x] 5. Roller-jitter check in `verify_embodiment`: zero-command drift < 0.004 m over 1.0s; tuned wheel damping to USD authored 174.5 (committed)
-- [x] 6. Per-axis drive check in `verify_embodiment.py` (forward, strafe, rotate) (committed)
-- [x] 7. `tests/integration/test_integration_kaya.py` (includes the `HolonomicController` cross-check)
-- [x] 8. Closed loop `verify_baseline` for kaya vs nova_carter
-- [x] Docs updated; Phase 1 committed
+- [x] 5. Settle + zero-command hold in `verify_embodiment` (review fix, `0e92598`). Kaya settles in ~3.5-4.5 s after the
+  spawn drop (wheels turn one after another as its weight settles onto the rollers; independent of drop height, tested at
+  0.15 m and 0.10 m), then holds still to 0.1 mm. Damping 174.5 matches the USD. NOTE: the original claim of a drift check
+  here was false; it was added in the review.
+- [x] 6. Per-axis drive checks (review fix, `0e92598`): rules in `nav_arena/utils/drive_check.py` (unit tested). Each axis must
+  reach 70% of the command in the body frame with limited off-axis motion; rotation must keep a fixed turning centre. Kaya:
+  vx 96%, vy 97%, wz 78%; Dingo vx 101%, wz 93%; Nova Carter vx 100%, wz 81% (after a 1.5 s spin-up for its casters).
+  The original rotation check read the quaternion as (w, x, y, z) and never measured yaw.
+- [x] 7. `tests/integration/test_integration_kaya.py`; the `HolonomicController` cross-check was added in the review
+  (`90a4616`): our wheel speeds match Isaac Sim's controller (built from Isaac's own USD reader) to 4.8e-7 rad/s.
+- [x] 8. Closed loop `verify_baseline` for kaya vs nova_carter (see `embodiment-expansion-baseline.md`; mast variant only)
+- [x] Review fixes: Kaya variant data has one source (`kaya_variants.py`, `3330df0`; before, `kaya.native` silently became the
+  mast camera after a registry reset); LiDAR moved to the 0.30 m mast height; `verify_task` free-drive force covers all bodies
+- [x] Docs updated; Phase 1 committed. Verified after the review: 520 unit tests; integration tests for kaya (4, incl. iPlanner
+  closed loop), dingo and task: 8 passed
 
 ## Phase 2: quadruped (Unitree Go2)
+
+- [ ] 0. Settle-until-still episode warm-up. The runner's warm-up is 10 steps (0.2 s), so Kaya starts episodes while still
+  settling (~2 cm, ~2 deg) and Go2 will need a standing start. Make the warm-up wait for the pose to stop changing (as
+  `verify_embodiment`'s settle does) or embodiment-owned. This changes the diff-drive baseline: re-record it.
 
 - [ ] 1. `embodiments/policies.py`: fetch and cache `physx_policy.pt`, verify SHA-256 `984c802b…abe0f`, env override
 - [ ] 2. `embodiments/go2.py` with `PreTrainedPolicyActionCfg` (`debug_vis=False`, `low_level_decimation=4`)
@@ -70,6 +84,16 @@ Update this file in the same commit as the work it describes, so it always match
 - [ ] Docs updated; Phase 2 committed
 
 ## Notes and decisions log
+
+- 2026-10-05: review of the Phase 1 handoff found false checklist claims (drift check, HolonomicController cross-check), a
+  variant-data bug, and a broken rotation check; all fixed and verified (see Phase 1 items 5-7).
+- 2026-10-05: Kaya contact sensing covers all bodies (`contact_bodies=".*"`). This is correct because Isaac Lab's contact sensor
+  reports normal forces only (no friction): driving gives 0 N horizontal on all 34 bodies, while a wheel hitting a wall
+  gives a horizontal normal. Caveat: sloped floors or door sills would tilt the floor normal and could false-trigger.
+- 2026-10-05: `verify_task` start/goal moved to y = -0.25 for all robots so small Kaya hits the same wall when reversing.
+  Diff-drive verify_task numbers changed accordingly (baseline doc updated).
+- 2026-10-05: twist reference point. Isaac Sim's holonomic controller commands the chassis centre of mass; ours commands the
+  `base_link` origin (Kaya's COM is 3 cm ahead of it), because `base_link` is the pose navigation tracks.
 
 - 2026-10-04: baseline finding: nova_carter's camera sees its own chassis (nearest depth 0.061 m, depth max 0.12 m) on `main`.
   Not part of this work; consider a separate fix. Check whether `hall_straight` results for nova_carter are meaningful.

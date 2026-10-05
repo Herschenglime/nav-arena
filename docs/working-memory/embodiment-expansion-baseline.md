@@ -34,6 +34,19 @@ Both robots: all checks PASS (goal termination, reset, collision termination).
 | Goal reached at step | 108 | 113 |
 | Collision detected at step | 197 | 116 |
 
+**Updated 2026-10-05 (Phase 1):** `verify_task` now starts every robot at (-2.5, -0.25) with the goal at (-1.0, -0.25), instead
+of y = 0. At y = 0 the small Kaya reversed past the wall the larger robots hit, so the collision check never fired for it;
+moving every robot keeps the test identical across embodiments. The diff-drive numbers above are from the old start, so
+compare against these instead (all checks PASS):
+
+| | nova_carter | dingo | kaya |
+|---|---|---|---|
+| Goal reached at step | 108 | 110 | 124 |
+| Collision detected at step | 91 | 108 | 179 |
+
+`verify_embodiment` also gained per-axis drive checks (see the checklist, Phase 1 item 6); the old ">0.05 m forward"
+displacement numbers above no longer appear in its output.
+
 ## `verify_baseline --method iplanner --route hall_straight` (scene kujiale_0003, seed 0)
 
 The Dingo run was repeated and every non-timing field matched exactly, so the simulation and planner are

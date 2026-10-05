@@ -208,10 +208,17 @@ register_embodiment(
    ```bash
    python -u nav_arena/nav_arena/scripts/verify_embodiment.py --robot my_robot --camera
    ```
-   Passing means: the robot moved forward more than 0.05 m under `DifferentialDriveAction` (the action term, wheel
-   joints and kinematics line up); the LiDAR ray caster returned hits; the RGB is `uint8`, 640x360 and non-black; the
-   depth has more than 5 % valid pixels with a plausible nearest ground return (camera orientation and height are
-   right).
+   Passing means:
+   - the robot comes to rest after the spawn drop (its pose stops changing) and then holds still under a zero
+     command (catches creeping wheels or jittering rollers);
+   - each drive axis it supports (forward; strafe if `max_lateral_speed > 0`; in-place rotation) reaches 70 % of the
+     commanded rate in the body frame with little motion on the other axes, and a rotation keeps a fixed turning
+     centre (the root may circle it if its origin is off the wheel axis). The rules are in
+     `nav_arena/utils/drive_check.py`;
+   - for a holonomic robot, the action term's wheel speeds match Isaac Sim's `HolonomicController` built from the
+     same USD;
+   - the LiDAR ray caster returned hits; the RGB is `uint8`, 640x360 and non-black; the depth has more than 5 % valid
+     pixels with a plausible nearest ground return (camera orientation and height are right).
 3. **Task check.** Goal tracking, reset, and collision detection with your `body_link` and contact settings.
    ```bash
    python -u nav_arena/nav_arena/scripts/verify_task.py --robot my_robot --camera
@@ -262,5 +269,5 @@ A new drive type needs:
    camera faces the direction of travel, and uses sideways speed for the lateral offset. A drive that cannot turn in
    place (ackermann) needs its own follower.
 
-Drive-specific validation (extend `verify_embodiment.py`): command each axis separately and check the result
-(straight line; strafe for holonomic; in-place rotation for diff and holonomic), then a `verify_baseline` run.
+Drive-specific validation: `verify_embodiment.py` already commands each axis separately (see step 2 of the
+validation list); a new drive type adds its own axes or limits there, then a `verify_baseline` run.
