@@ -10,7 +10,7 @@ The codebase strictly enforces separation of concerns across nine dedicated modu
 
 ```text
 nav_arena/
-├── cli/          # Main entry point package (run, sweep, runs, doctor, routes, map) - ZERO simulator imports
+├── cli/          # Main entry point package (run, sweep, runs, doctor, routes, robots, map) - ZERO simulator imports
 ├── benchmarks/   # Unified benchmark engine: RunSpec, RunSession, worker, manifest, sweep, tracking, doctor
 ├── core/         # SimulationApp lifecycle & boot-time extension injection
 ├── embodiments/  # Robot kinematics, sensor configs, in-memory URDF synthesis (ZERO ROS 2 dependencies)
@@ -27,7 +27,7 @@ nav_arena/
 
 ### Module Responsibilities & Invariants
 
-- **`nav_arena.cli`**: Top-level command-line dispatcher for `run`, `sweep`, `runs`, `doctor`, `routes`, and `map`.
+- **`nav_arena.cli`**: Top-level command-line dispatcher for `run`, `sweep`, `runs`, `doctor`, `routes`, `robots`, and `map`.
   - **Fast Startup Invariant**: Strictly **ZERO simulator or ML imports** (`isaacsim`, `isaaclab`, `omni`, `pxr`, `rclpy`, `torch`). The CLI process only parses arguments, validates specs, and spawns isolated worker subprocesses via `managed_process`.
 - **`nav_arena.benchmarks`**: Evaluation harness and run tracking.
   - **`spec.py`**: Pure, pre-boot `RunSpec` validation and CLI/YAML override resolution.
@@ -38,6 +38,8 @@ nav_arena/
   - **`doctor.py`**: Diagnostic environment and dependency auditor.
 - **`nav_arena.core`**: Handles `AppLauncher` bootstrapping. Only put initialization and lifecycle logic here; do not introduce robot or task domain logic.
 - **`nav_arena.embodiments`**: Defines physical properties, sensor mount points, and kinematic math.
+  - **Light registry:** `registry.py` and `base.py` import no simulator or ML modules, and the package exports its heavy names lazily (like `scenes/`). Register built-in robots with lazy `"module:Class"` strings so `nav_arena robots list` and `--robot` validation stay free of `torch`/`isaaclab`.
+  - **Variants:** known configurations of a robot (`kaya.mast`, `kaya.native`) are data-only field overrides declared at registration; see the [robot guide](docs/guides/adding-a-robot.md#variants).
   - **Critical Invariant**: Strictly **ZERO ROS 2 imports**. Embodiments must remain purely mathematical and Isaac Lab-native. All ROS 2 bridging belongs exclusively in `nav_arena.ros2`.
   - Put pure kinematics calculations in [`kinematics.py`](file:///home/robopi/simulation/nav_arena/nav_arena/embodiments/kinematics.py) (e.g. `diff_drive_ik`, `diff_drive_fk`).
 - **`nav_arena.tasks`**: Inherit from Isaac Lab's `ManagerBasedRLEnv`. Define MDP command terms, observation groups, termination conditions, and contact metrics here.

@@ -118,6 +118,7 @@ nav_arena runs rerun <run-id>               # re-execute an episode with its sav
 # 7. Route and map utilities
 nav_arena routes list --scene kujiale_0003
 nav_arena routes show hall_straight
+nav_arena robots list            # robots, drive types and variants (--robot <robot>[.<variant>])
 nav_arena map show --scene kujiale_0003
 ```
 
@@ -275,7 +276,7 @@ pytest -c nav_arena/pyproject.toml -m "not integration" -q
 
 The codebase is organized into cleanly decoupled subsystems:
 
-- **CLI & Orchestration ([`nav_arena.cli`](file:///home/robopi/simulation/nav_arena/nav_arena/cli/))**: Main command-line entry point supporting `run`, `sweep`, `runs`, `doctor`, `routes`, and `map`. Imports zero simulator or machine learning modules for fast (<0.15s) execution.
+- **CLI & Orchestration ([`nav_arena.cli`](file:///home/robopi/simulation/nav_arena/nav_arena/cli/))**: Main command-line entry point supporting `run`, `sweep`, `runs`, `doctor`, `routes`, `robots`, and `map`. Imports zero simulator or machine learning modules for fast (<0.15s) execution.
 - **Benchmarks & Sweeps ([`nav_arena.benchmarks`](file:///home/robopi/simulation/nav_arena/nav_arena/benchmarks/))**: Unified evaluation harness: `RunSpec` validation, session lifecycle management (`RunSession`), worker subprocess runner (`worker.py`), atomic manifest tracking (`BatchManifest`), Cartesian sweep matrix planner (`sweep.py`), result aggregation and comparison (`tracking.py`), and system diagnostics (`doctor.py`).
 - **Core Simulation ([`nav_arena.core`](file:///home/robopi/simulation/nav_arena/nav_arena/core/app.py))**: Centralized SimulationApp lifecycle management ([`launch_simulation_app`](file:///home/robopi/simulation/nav_arena/nav_arena/core/app.py)), boot-time OmniGraph/ROS 2 extension flag injection, and livestreaming configuration.
 - **Embodiments ([`nav_arena.embodiments`](file:///home/robopi/simulation/nav_arena/nav_arena/embodiments/))**: Robot physical properties, kinematic configurations (`DifferentialDriveAction`), pure kinematics math ([`diff_drive_ik`](file:///home/robopi/simulation/nav_arena/nav_arena/embodiments/kinematics.py)), programmatic sensor rigging (planar 360° LiDAR), and in-memory URDF synthesis ([`generate_robot_urdf`](file:///home/robopi/simulation/nav_arena/nav_arena/embodiments/urdf.py)). Completely decoupled from ROS 2 middleware dependencies. Derived assets are resolved lazily on demand.

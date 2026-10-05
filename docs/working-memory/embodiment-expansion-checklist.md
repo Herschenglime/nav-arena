@@ -7,7 +7,7 @@ Update this file in the same commit as the work it describes, so it always match
 - **Rules:** commit locally, never push (the user pushes). Headless sims via `./agy_python.sh` are OK; GUI checks
   and the Nav2 regression are the user's. Install packages only into `env_isaaclab` with `uv pip --no-deps`.
 - **Last updated:** 2026-10-04
-- **Next action:** Phase 0 step 7 (docs: adding-a-robot.md, CONTRIBUTING.md, README), then the exit check (re-run the baseline comparison)
+- **Next action:** Phase 1 step 1 (inspect the Kaya USD with `pxr`)
 
 ## Phase 0: drive-agnostic base (diff-drive results must not change)
 
@@ -41,9 +41,9 @@ Update this file in the same commit as the work it describes, so it always match
     `validate_spec`, because `spec.py` must stay free of simulator/ML imports. All current policies need the camera
   - Built-in robots have no variants yet; Kaya adds `kaya.mast` / `kaya.native` in Phase 1. `kaya.py` must NOT self-register with
     bare `register_embodiment("kaya", ...)` unless it passes the variants too (it can; `variants=None` keeps them)
-- [ ] 7. Unit tests and docs updated (`adding-a-robot.md` drive-type section)
-- [ ] Exit: unit tests pass; nova_carter and dingo match the recorded baseline
-- [ ] Phase 0 committed
+- [x] 7. Unit tests and docs updated (`adding-a-robot.md` incl. variants section, CONTRIBUTING, README) (committed)
+- [x] Exit: 475 unit tests pass; nova_carter and dingo match the recorded baseline EXACTLY (summary.json fields and every steps.jsonl row identical; verify_embodiment/verify_task numbers identical, nova_carter camera check fails as before)
+- [x] Phase 0 committed
 
 ## Phase 1: holonomic drive (Kaya)
 

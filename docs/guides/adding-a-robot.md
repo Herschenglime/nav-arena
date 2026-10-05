@@ -8,8 +8,10 @@ and via `create_point_nav_env_cfg(robot_name=...)`.
 Existing examples to copy from: [`embodiments/nova_carter.py`](../../nav_arena/embodiments/nova_carter.py) (simple) and
 [`embodiments/dingo.py`](../../nav_arena/embodiments/dingo.py) (single rigid body, derived USD, camera).
 
-Today only **differential drive** is supported end to end; adding another drive type is covered in
-[Adding a new drive type](#adding-a-new-drive-type-ackermann-holonomic) below.
+Every embodiment takes the same command, the body-frame twist `[vx, vy, wz]` (forward m/s, left m/s, yaw rad/s). A
+differential drive ignores `vy`; holonomic and legged robots use it. What differs per robot is how the twist becomes
+joint targets (the action term), its limits, and its physics timing. Today differential drive is implemented end to
+end; adding holonomic or quadruped robots is covered in [Adding a new drive type](#adding-a-new-drive-type).
 
 ## 1. Inspect the USD first
 
@@ -85,11 +87,17 @@ ROBOT_ACTION_CFG = DifferentialDriveActionCfg(
 @dataclass
 class MyRobotEmbodimentCfg(RobotEmbodimentCfg):
     name: str = "my_robot"
+    drive_type: str = "diff"          # "diff" | "holonomic" | "quadruped"
     articulation_cfg: ArticulationCfg = field(default_factory=create_my_robot_articulation_cfg)
     action_cfg: DifferentialDriveActionCfg = field(default_factory=lambda: ROBOT_ACTION_CFG)
     wheel_radius: float = ...
     wheel_base: float = ...
+    max_lateral_speed: float = 0.0    # m/s; 0 = cannot strafe (differential drive)
+    sim_dt: float = 0.01              # physics timestep; the control step is sim_dt * decimation (0.02 s)
+    decimation: int = 2
+    spawn_height: float = 0.25        # root height above the floor at spawn
     body_link: str = "..."            # the USD link carrying the chassis colliders
+    contact_bodies: str | None = None # regex of bodies whose contacts count as collisions (default: body_link)
     ground_contact_on_body: bool = False
     lidar_offset: tuple = (0.0, 0.0, 0.30)
     camera_offset: tuple = (0.0, 0.0, 0.30)
@@ -108,6 +116,13 @@ class MyRobotEmbodimentCfg(RobotEmbodimentCfg):
 - **`ground_contact_on_body`.** Set `True` when the body link also carries a part that touches the floor (a caster
   sphere). Its resting support force would otherwise look like a collision at t=0, so collision detection then uses
   lateral (horizontal) force only. (The Dingo's resting `base_link` force is about 17.7 N.)
+
+- **Timing and spawn height.** `sim_dt`, `decimation` and `spawn_height` belong to the embodiment: a learned locomotion
+  policy only works at the timing it was trained with. The control step `sim_dt * decimation` is 0.02 s (50 Hz) for
+  every robot so far; the follower and the benchmark session read it from the embodiment. Camera and viewport render
+  rates are physical (5 Hz and about 33 Hz) and are converted to steps with `sim_dt`.
+- **`contact_bodies`.** Contact sensing normally attaches to `body_link`. Legged robots list several bodies (base,
+  hips, thighs, calves) and leave out the feet, which touch the floor all the time.
 
 ## 3. Fix the asset if it needs fixing
 
@@ -141,9 +156,43 @@ Sensor mount geometry lives on the embodiment; the factories in
 
 ## 5. Register it
 
-Add the import and registration in `embodiments/registry.py::register_default_embodiments`, and export the new names
-from `embodiments/__init__.py`. (A file can also self-register with `register_embodiment("my_robot",
-MyRobotEmbodimentCfg)` at module bottom; the Dingo does.) Instances are deep-copied by `get_embodiment`.
+Register the embodiment in `embodiments/registry.py::register_default_embodiments`, using a lazy `"module:Class"`
+string and the drive type: `register_embodiment("my_robot", "nav_arena.embodiments.my_robot:MyRobotEmbodimentCfg",
+variants=(), drive_type="diff")`. The lazy string keeps robot names and variants available to the CLI without
+importing torch or Isaac Lab (the CLI must stay free of those imports). Export the new names from
+`embodiments/__init__.py`'s lazy export table. (A module may also register itself on import with
+`register_embodiment("my_robot", MyRobotEmbodimentCfg)`; that keeps any variants already declared for the name.)
+Instances are deep-copied by `get_embodiment`.
+
+`nav_arena robots list` shows every registered robot with its drive type and variants. `--robot` accepts a robot name
+(`kaya`, the default variant) or `<robot>.<variant>` (`kaya.native`); `run` and `sweep` reject unknown names before
+starting anything and record the canonical name (`kaya.mast`) in results.
+
+### Variants
+
+When a robot has known configurations worth comparing (a camera on a virtual mast versus the real sensor pose, a
+robot with and without its camera), declare them instead of adding flags:
+
+```python
+register_embodiment(
+    "kaya",
+    "nav_arena.embodiments.kaya:KayaEmbodimentCfg",
+    variants=[
+        EmbodimentVariant("mast", "RGB-D camera on a virtual mast, comparable to the other robots.",
+                          {"camera_offset": (0.0, 0.0, 0.30)}),
+        EmbodimentVariant("native", "The real RealSense pose.", {"camera_offset": (0.05, 0.0, 0.10)}),
+    ],
+    default_variant="mast",
+    drive_type="holonomic",
+)
+```
+
+- A variant is data only: it replaces fields of the base embodiment. Registration fails on an unknown field, so a
+  typo cannot silently do nothing; `name` and `variant` cannot be overridden.
+- The bare name (`kaya`) selects `default_variant`; any other variant needs the suffix (`kaya.native`).
+- Sensor availability is a field too: `sensors=("lidar",)` marks a variant without a camera. Asking such a variant for
+  the camera raises an error naming the variant, before the scene loads.
+- A robot without variants keeps its plain name (`dingo`), so existing results are unaffected.
 
 ## 6. Validate, in this order
 
@@ -188,45 +237,29 @@ MyRobotEmbodimentCfg)` at module bottom; the Dingo does.) Instances are deep-cop
 | Policy stops short of the goal | A visual aid in the scene (e.g. the goal arrow) is visible to the depth camera |
 | `RuntimeError: ... no prim` while building a derived asset | The upstream asset's layout changed; update the override |
 
-## Adding a new drive type (ackermann, holonomic)
+## Adding a new drive type
 
-The whole stack currently assumes a two-element command `[v, omega]`:
+The shared pieces are done: the command is the body twist `[vx, vy, wz]` everywhere (the action term, the in-process
+runner, the ROS 2 `Twist` adapter and the verify scripts), `RobotEmbodimentCfg` carries `drive_type` and
+`max_lateral_speed`, the embodiment owns its physics timing and spawn height, and the follower returns `(vx, vy, wz)`.
+Policies are not affected: they output a body-frame path, and the follower turns the path into a command.
 
-| Where | What assumes it |
-|---|---|
-| `embodiments/actions.py` | `DifferentialDriveAction` has `action_dim == 2` and converts through `diff_drive_ik` |
-| `embodiments/base.py` | `RobotEmbodimentCfg` only carries diff-drive geometry (`wheel_radius`, `wheel_base`, `max_angular_speed`) |
-| `tasks/point_nav.py` | `ActionsCfg.robot_action` is bound from `embodiment.action_cfg` |
-| `methods/in_process/controller.py` | `follow_path` returns `(v, omega)` and may turn in place |
-| `methods/in_process/runner.py` | builds `torch.tensor([[v, w]])` for `task.step` |
-
-Policies are **not** affected: they output a body-frame path, and the follower turns the path into a command. That
-split is what makes a new drive tractable. A new drive type needs five pieces:
+A new drive type needs:
 
 1. **Kinematics** in `embodiments/kinematics.py`: pure-torch inverse (and forward) kinematics with unit tests,
    modeled on `diff_drive_ik` / `diff_drive_fk` (validate inputs, round-trip test IK then FK).
-   - *Ackermann:* `(v, steering angle)` to rear-wheel speeds and front steering angles (wheelbase, track width,
-     steering limit); the turning radius is `wheelbase / tan(steer)`.
-   - *Holonomic* (mecanum/omni): `(vx, vy, omega)` to per-wheel speeds from the wheel layout.
+   - *Holonomic* (mecanum/omni): twist to per-wheel speeds from the wheel layout (`u_i = a_i . (v + w x r_i)`).
+   - *Ackermann:* `(v, steering angle)` to rear-wheel speeds and front steering angles; not part of the current work.
 2. **An action term and config** in `embodiments/actions.py` (an Isaac Lab `ActionTerm` plus `ActionTermCfg`), like
-   `DifferentialDriveAction`: resolve the joints in `__init__` (raise on a wrong joint count), set `action_dim`
-   (2 for ackermann, 3 for holonomic), implement `process_actions` (scale/offset and clip to limits),
-   `apply_actions` (write joint velocity targets, and for ackermann *position* targets for the steering joints), and
-   `reset`.
-3. **Embodiment fields.** Add a `drive_type` (`"diff"`, `"ackermann"`, `"holonomic"`) and the geometry the new drive
-   needs (ackermann: wheelbase, track width, max steering angle; holonomic: wheel layout), keeping the diff-drive
-   fields optional. Update the registry tests.
-4. **A drive-aware follower.** `follow_path` must map a body-frame path into the command space and respect the
-   drive's limits: holonomic can strafe and never needs to turn in place; ackermann cannot turn in place at all and
-   has a minimum turning radius, so the follower must steer along an arc (and a stopped or blocked robot needs
-   reverse or a K-turn, or the planner must be curvature-aware). Policies stay unchanged.
-5. **Runner and task plumbing.** The action tensor width must come from the embodiment (a `command_dim`), not a
-   hardcoded `[[v, w]]`; `task.step` and `PointNavTask` bind `embodiment.action_cfg` already.
-
-A proposed refactor makes this slot in cleanly: a `DriveModel` per `drive_type` (command dimension, limits, and
-`follow(path, goal_distance) -> command`), with `RobotEmbodimentCfg.drive` replacing the ad hoc diff-drive fields
-over time. It is not built; implementing it is the first step of the ackermann/holonomic work.
+   `DifferentialDriveAction`: resolve the joints in `__init__` (raise on a wrong joint count), keep `action_dim == 3`,
+   implement `process_actions` (scale/offset and clip to limits), `apply_actions` and `reset`. A legged robot instead
+   uses Isaac Lab's `PreTrainedPolicyAction`, which feeds the twist to a trained locomotion policy.
+3. **Embodiment fields:** `drive_type`, `max_lateral_speed`, and for a policy-driven robot the `sim_dt`, `decimation` and
+   `spawn_height` the policy was trained with.
+4. **Follower behaviour.** `follow_path` already strafes when `FollowerCfg.max_lateral_speed > 0` (the benchmark
+   session passes `min(embodiment.max_lateral_speed, max_speed)`): it keeps turning toward the target so the forward
+   camera faces the direction of travel, and uses sideways speed for the lateral offset. A drive that cannot turn in
+   place (ackermann) needs its own follower.
 
 Drive-specific validation (extend `verify_embodiment.py`): command each axis separately and check the result
-(straight line; strafe for holonomic; in-place rotation for diff/holonomic; for ackermann, the measured arc radius
-versus `wheelbase / tan(steer)`), then a `verify_baseline` run once the follower exists.
+(straight line; strafe for holonomic; in-place rotation for diff and holonomic), then a `verify_baseline` run.
