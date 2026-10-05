@@ -25,6 +25,7 @@ from .registry import (
 _LAZY_EXPORTS = {
     "actions": ("DifferentialDriveAction", "DifferentialDriveActionCfg"),
     "dingo": ("DINGO_ACTION_CFG", "DingoEmbodimentCfg", "create_dingo_articulation_cfg"),
+    "kaya": ("KAYA_ACTION_CFG", "KAYA_ARTICULATION_CFG", "KayaEmbodimentCfg", "KAYA_MAST", "KAYA_NATIVE"),
     "kinematics": ("diff_drive_fk", "diff_drive_ik"),
     "nova_carter": ("NOVA_CARTER_ACTION_CFG", "NOVA_CARTER_CFG", "NovaCarterEmbodimentCfg"),
     "sensors": (
@@ -43,6 +44,7 @@ _LAZY_MODULE_OF = {name: module for module, names in _LAZY_EXPORTS.items() for n
 if TYPE_CHECKING:
     from .actions import DifferentialDriveAction, DifferentialDriveActionCfg
     from .dingo import DINGO_ACTION_CFG, DingoEmbodimentCfg, create_dingo_articulation_cfg
+    from .kaya import KAYA_ACTION_CFG, KAYA_ARTICULATION_CFG, KAYA_MAST, KAYA_NATIVE, KayaEmbodimentCfg
     from .kinematics import diff_drive_fk, diff_drive_ik
     from .nova_carter import NOVA_CARTER_ACTION_CFG, NOVA_CARTER_CFG, NovaCarterEmbodimentCfg
     from .sensors import (

@@ -40,10 +40,11 @@ def restore_registry_after_test():
 
 
 def test_default_embodiments_registered():
-    """Verify that default embodiments ('nova_carter' and 'dingo') are registered."""
+    """Verify that default embodiments ('nova_carter', 'dingo', 'kaya') are registered."""
     names = list_embodiments()
     assert "nova_carter" in names
     assert "dingo" in names
+    assert "kaya" in names
 
 
 def test_get_nova_carter_embodiment():

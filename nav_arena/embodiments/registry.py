@@ -232,11 +232,29 @@ def clear_registry() -> None:
 
 
 def register_default_embodiments() -> None:
-    """Register built-in framework embodiments ('nova_carter', 'dingo') lazily, without importing them."""
+    """Register built-in framework embodiments ('nova_carter', 'dingo', 'kaya') lazily, without importing them."""
+    from .base import EmbodimentVariant
+
     register_embodiment(
         "nova_carter", "nav_arena.embodiments.nova_carter:NovaCarterEmbodimentCfg", variants=(), drive_type="diff"
     )
     register_embodiment("dingo", "nav_arena.embodiments.dingo:DingoEmbodimentCfg", variants=(), drive_type="diff")
+    register_embodiment(
+        "kaya",
+        "nav_arena.embodiments.kaya:KayaEmbodimentCfg",
+        variants=[
+            EmbodimentVariant(
+                name="mast",
+                description="Virtual camera mast at 0.30 m (same viewpoint as Nova Carter / Dingo).",
+            ),
+            EmbodimentVariant(
+                name="native",
+                description="Native RealSense D435 pose from the Kaya USD: ~0.16 m high, pitched 20° down.",
+            ),
+        ],
+        default_variant="mast",
+        drive_type="holonomic",
+    )
 
 
 register_default_embodiments()
