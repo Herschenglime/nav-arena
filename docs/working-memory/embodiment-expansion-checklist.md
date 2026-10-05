@@ -7,7 +7,7 @@ Update this file in the same commit as the work it describes, so it always match
 - **Rules:** commit locally, never push (the user pushes). Headless sims via `./agy_python.sh` are OK; GUI checks
   and the Nav2 regression are the user's. Install packages only into `env_isaaclab` with `uv pip --no-deps`.
 - **Last updated:** 2026-10-04
-- **Next action:** Phase 1 step 2 (`holonomic_matrix`/`holonomic_ik`/`holonomic_fk` in `kinematics.py` + tests)
+- **Next action:** Phase 1 step 3 (`HolonomicDriveAction`; wheel geometry read from the USD `isaacmecanumwheel:*` attrs)
 
 ## Phase 0: drive-agnostic base (diff-drive results must not change)
 
@@ -48,7 +48,7 @@ Update this file in the same commit as the work it describes, so it always match
 ## Phase 1: holonomic drive (Kaya)
 
 - [x] 1. Inspect the Kaya USD with `pxr`: findings in `embodiment-expansion-kaya-notes.md` (wheel geometry + `isaacmecanumwheel:*` attrs authored in the USD; 30 passive roller joints; camera ~0.16 m high pitched 20 deg; ground plane outside the default prim)
-- [ ] 2. `holonomic_matrix` / `holonomic_ik` / `holonomic_fk` in `kinematics.py` + unit tests
+- [x] 2. `holonomic_matrix` / `holonomic_ik` / `holonomic_fk` in `kinematics.py` + 15 unit tests (`test_holonomic_kinematics.py`, Kaya + 4-wheel mecanum) (committed)
 - [ ] 3. `HolonomicDriveAction` / `HolonomicDriveActionCfg`
 - [ ] 4. `embodiments/kaya.py` with variants `kaya.mast` (default) and `kaya.native`; register and export
 - [ ] 5. Roller-jitter check in `verify_embodiment`; derived USD only if needed
