@@ -238,7 +238,7 @@ def run_episode(task: Any, policy: InProcessPolicy, cfg: EpisodeCfg | None = Non
     initial_distance = distance = float(task.get_goal_distance())
     terminal_cause: str | None = None
     sim_time = 0.0
-    v = w = 0.0
+    vx = vy = wz = 0.0
     display_period = max(1, round(1.0 / (cfg.viewer_render_hz * step_dt))) if cfg.viewer is not None else 0
     next_progress = 0.0
     stall_ref_xy = prev_xy.copy()
@@ -257,7 +257,7 @@ def run_episode(task: Any, policy: InProcessPolicy, cfg: EpisodeCfg | None = Non
                 task.sim.render()
 
         if cfg.progress_every_s > 0 and sim_time + 1e-9 >= next_progress:
-            state = "STOPPED by policy" if stop else f"v={v:.2f} m/s w={w:+.2f} rad/s"
+            state = "STOPPED by policy" if stop else f"vx={vx:.2f} vy={vy:+.2f} m/s wz={wz:+.2f} rad/s"
             logger.info(f"t={sim_time:5.1f}s pos=({x:.2f}, {y:.2f}) goal_distance={distance:.2f} m {state}")
             next_progress += cfg.progress_every_s
 

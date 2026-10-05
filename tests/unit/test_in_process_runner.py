@@ -425,3 +425,15 @@ def test_falling_over_while_settling_is_an_error():
     task = FakeTask(forced_cause="tipped")
     with pytest.raises(RuntimeError, match="settling"):
         run_episode(task, GoalSeeker(), _cfg(warmup_steps=0, settle=SettleCfg(window_s=0.1)))
+
+
+def test_progress_log_reports_the_command_being_sent(monkeypatch):
+    """Verify the progress line shows the live command (it once printed stale zeros while the robot drove)."""
+    from nav_arena.methods.in_process import runner
+
+    lines = []
+    monkeypatch.setattr(runner.logger, "info", lambda message, *args, **kwargs: lines.append(str(message)))
+    run_episode(FakeTask(goal=(5.0, 0.0)), GoalSeeker(), _cfg(max_steps=200, warmup_steps=0, progress_every_s=1.0))
+    moving = [line for line in lines if line.startswith("t=") and "vx=" in line]
+    assert moving, lines
+    assert any("vx=0.00" not in line for line in moving[1:])
