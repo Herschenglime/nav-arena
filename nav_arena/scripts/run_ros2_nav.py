@@ -48,7 +48,7 @@ def main():
         state_publisher = None
         executor = None
 
-        spawn_pos = (-2.5, 0.0, 0.25)
+        spawn_pos = (-2.5, 0.0)
         spawn_rot = (0.0, 0.0, 0.0, 1.0)
         goal_pos = (-1.0, 0.0)
         goal_heading = 0.0

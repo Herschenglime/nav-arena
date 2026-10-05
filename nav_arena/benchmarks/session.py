@@ -25,9 +25,6 @@ from nav_arena.utils import RUNS_DIR, get_logger
 
 logger = get_logger("benchmarks.session")
 
-_STEP_DT = 0.02
-"""Seconds per control step (physics dt 0.01 x decimation 2)."""
-
 
 @dataclass
 class SessionKey:
@@ -218,8 +215,10 @@ class RunSession:
 
     def _build_task(self, ep: EpisodeSpec, follow: bool) -> None:
         """Construct the PointNav task for this episode's spawn, goal and limits."""
+        from nav_arena.embodiments import get_embodiment
         from nav_arena.tasks import PointNavTask, create_point_nav_env_cfg
 
+        step_dt = get_embodiment(self.key.robot).step_dt
         spawn_xy, goal_xy = ep.spawn, ep.goal
         spawn_yaw = (
             ep.spawn_yaw if ep.spawn_yaw is not None else math.atan2(goal_xy[1] - spawn_xy[1], goal_xy[0] - spawn_xy[0])
@@ -236,11 +235,11 @@ class RunSession:
 
         env_cfg = create_point_nav_env_cfg(
             scene_id_or_path=self.key.scene,
-            robot_spawn_pos=(spawn_xy[0], spawn_xy[1], 0.25),
+            robot_spawn_pos=(spawn_xy[0], spawn_xy[1]),
             robot_spawn_rot=(0.0, 0.0, math.sin(spawn_yaw / 2.0), math.cos(spawn_yaw / 2.0)),
             goal_pos=goal_xy,
             goal_threshold=ep.limits.goal_tolerance,
-            episode_length_s=ep.limits.max_steps * _STEP_DT + 10.0,
+            episode_length_s=ep.limits.max_steps * step_dt + 10.0,
             robot_name=self.key.robot,
             enable_camera=True,
             enable_goal_camera=enable_goal_camera,

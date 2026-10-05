@@ -67,7 +67,7 @@ def run_nav2_verification(simulation_app):
     logger.info(f"Goal:  ({args_cli.goal_x:.2f}, {args_cli.goal_y:.2f}) [yaw={args_cli.goal_yaw:.2f} rad]")
 
     # 4. Configure PointNavTask environment in kujiale_0003
-    spawn_pos = (args_cli.spawn_x, args_cli.spawn_y, 0.25)
+    spawn_pos = (args_cli.spawn_x, args_cli.spawn_y)
     half_spawn_yaw = args_cli.spawn_yaw * 0.5
     spawn_rot = (0.0, 0.0, math.sin(half_spawn_yaw), math.cos(half_spawn_yaw))
     goal_pos = (args_cli.goal_x, args_cli.goal_y)

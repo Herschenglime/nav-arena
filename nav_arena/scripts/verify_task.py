@@ -86,7 +86,7 @@ def run_verification():
 
 
     # Robot spawn location and target goal in the wide living room opening
-    spawn_pos = (-2.5, 0.0, 0.25)
+    spawn_pos = (-2.5, 0.0)
     spawn_rot = (0.0, 0.0, 0.0, 1.0)
     # Target goal 1.5m straight ahead along +X
     goal_pos = (-1.0, 0.0)

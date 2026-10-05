@@ -226,9 +226,21 @@ class PointNavEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.render_interval = 3
 
 
+VIEWPORT_RENDER_HZ = 100.0 / 3.0
+"""Render rate without cameras: ~33 Hz smooth viewport interaction (3 physics steps at ``dt = 0.01``)."""
+
+CAMERA_RENDER_HZ = 5.0
+"""Render rate with cameras: the learned baselines' planning rate. Every render also pays for RTX sensor rendering."""
+
+
+def _render_interval(rate_hz: float, sim_dt: float) -> int:
+    """Physics steps between renders for a render rate, so the rate does not depend on the physics timestep."""
+    return max(1, round(1.0 / (rate_hz * sim_dt)))
+
+
 def create_point_nav_env_cfg(
     scene_id_or_path: str = DEFAULT_INTERIOR_AGENT_SCENE_ID,
-    robot_spawn_pos: tuple[float, float, float] = (-2.5, 0.0, 0.25),
+    robot_spawn_pos: tuple[float, ...] = (-2.5, 0.0),
     robot_spawn_rot: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0),
     goal_pos: tuple[float, float] = (-1.0, 0.0),
     goal_heading: float = 0.0,
@@ -249,7 +261,8 @@ def create_point_nav_env_cfg(
 
     Args:
         scene_id_or_path: InteriorAgent scene identifier or custom USD path.
-        robot_spawn_pos: (x, y, z) initial position of robot in meters.
+        robot_spawn_pos: (x, y) or (x, y, z) initial position of the robot in meters. Without z, the embodiment's
+            ``spawn_height`` is used.
         robot_spawn_rot: (x, y, z, w) initial quaternion orientation.
         goal_pos: (x, y) target coordinates in meters.
         goal_heading: Target heading in radians.
@@ -262,9 +275,9 @@ def create_point_nav_env_cfg(
             sensors, and optional USD stage patch are applied.
         enable_camera: Mount the embodiment's RGB-D camera. The app must be launched with cameras enabled.
         enable_goal_camera: Add a free-standing camera for rendering goal images (single environment only).
-        render_interval: Physics steps between renders. ``None`` keeps 3 (~33 Hz viewport) without a camera and uses
-            20 (5 Hz, the learned baselines' planning rate at ``dt=0.01``) when a camera is enabled, since every render
-            then also pays for RTX sensor rendering.
+        render_interval: Physics steps between renders. ``None`` renders at ~33 Hz (viewport) without a camera and 5 Hz
+            (the learned baselines' planning rate) when a camera is enabled, since every render then also pays for RTX
+            sensor rendering. Both are converted to steps with the embodiment's physics timestep.
         max_tilt: Roll/pitch magnitude in radians beyond which the robot counts as tipped over.
         show_goal_marker: Draw Isaac Lab's goal-pose arrow in the scene. The arrow is real geometry, so **cameras see
             it**: a depth planner treats it as an obstacle sitting on its own goal (iPlanner halted 3.5 m out because
@@ -275,8 +288,12 @@ def create_point_nav_env_cfg(
         Configured PointNavEnvCfg.
     """
     embodiment = get_embodiment(robot_name)
+    if len(robot_spawn_pos) == 2:
+        robot_spawn_pos = (*robot_spawn_pos, embodiment.spawn_height)
     env_cfg = PointNavEnvCfg()
     env_cfg.robot_name = robot_name
+    env_cfg.sim.dt = embodiment.sim_dt
+    env_cfg.decimation = embodiment.decimation
     env_cfg.scene = PointNavSceneCfg(num_envs=num_envs, env_spacing=10.0)
 
     # Configure scene asset and robot spawn
@@ -299,7 +316,7 @@ def create_point_nav_env_cfg(
     # Bind the embodiment's action term and contact sensing to its USD body link
     env_cfg.actions.robot_action = embodiment.action_cfg.replace(asset_name="robot")
     env_cfg.scene.contact_forces = env_cfg.scene.contact_forces.replace(
-        prim_path=f"{{ENV_REGEX_NS}}/Robot/{embodiment.body_link}"
+        prim_path=f"{{ENV_REGEX_NS}}/Robot/{embodiment.contact_body_expr}"
     )
 
     # USD-level embodiment fixes must land after spawning and before physics starts. Isaac Lab only allows
@@ -334,8 +351,10 @@ def create_point_nav_env_cfg(
     env_cfg.episode_length_s = episode_length_s
     if render_interval is not None:
         env_cfg.sim.render_interval = render_interval
-    elif enable_camera:
-        env_cfg.sim.render_interval = 20
+    else:
+        env_cfg.sim.render_interval = _render_interval(
+            CAMERA_RENDER_HZ if enable_camera else VIEWPORT_RENDER_HZ, embodiment.sim_dt
+        )
 
     return env_cfg
 

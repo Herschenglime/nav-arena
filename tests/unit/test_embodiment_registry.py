@@ -257,3 +257,34 @@ def test_urdf_generation_with_embodiments():
     dingo_urdf = generate_minimal_urdf(dingo_cfg)
     root_dingo = ET.fromstring(dingo_urdf)
     assert root_dingo.attrib.get("name") == "dingo"
+
+
+def test_wheeled_embodiments_are_differential_drive_without_strafing():
+    """Verify the existing robots are differential drives with the historical timing and no lateral speed."""
+    for name in ("nova_carter", "dingo"):
+        cfg = get_embodiment(name)
+        assert cfg.drive_type == "diff"
+        assert cfg.max_lateral_speed == 0.0
+        assert (cfg.sim_dt, cfg.decimation, cfg.spawn_height) == (0.01, 2, 0.25)
+        assert cfg.step_dt == pytest.approx(0.02)
+
+
+def test_unknown_drive_type_is_rejected():
+    """Verify a typo in drive_type fails at construction instead of silently selecting the wrong behaviour."""
+    with pytest.raises(ValueError, match="drive_type"):
+        RobotEmbodimentCfg(drive_type="omni")
+
+
+def test_policy_driven_drive_types():
+    """Verify only the legged drive types are policy driven."""
+    from nav_arena.embodiments.base import is_policy_driven
+
+    assert is_policy_driven("quadruped")
+    assert not is_policy_driven("diff") and not is_policy_driven("holonomic")
+
+
+def test_contact_body_expr_defaults_to_body_link():
+    """Verify contact sensing falls back to body_link unless contact_bodies is set."""
+    cfg = RobotEmbodimentCfg(body_link="base_link")
+    assert cfg.contact_body_expr == "base_link"
+    assert RobotEmbodimentCfg(body_link="base", contact_bodies="(base|.*_calf)").contact_body_expr == "(base|.*_calf)"

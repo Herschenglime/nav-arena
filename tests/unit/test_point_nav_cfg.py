@@ -197,3 +197,37 @@ def test_scene_queries_are_opt_in(scene_usd):
     """Verify PhysX scene queries (needed by the follow camera's occlusion rays) are off unless requested."""
     assert _cfg(scene_usd).sim.enable_scene_query_support is False
     assert _cfg(scene_usd, scene_queries=True).sim.enable_scene_query_support is True
+
+
+def test_existing_robots_keep_their_timing_and_spawn_height(scene_usd):
+    """Verify the wheeled robots keep dt=0.01, decimation 2 and the 0.25 m spawn clearance (a 2-tuple takes it)."""
+    for name in ("nova_carter", "dingo"):
+        cfg = _cfg(scene_usd, robot_name=name, robot_spawn_pos=(1.0, 2.0))
+        assert (cfg.sim.dt, cfg.decimation) == (0.01, 2)
+        assert cfg.scene.robot.init_state.pos == (1.0, 2.0, 0.25)
+
+
+def test_explicit_spawn_z_is_respected(scene_usd):
+    """Verify a 3-tuple spawn position is used as given."""
+    assert _cfg(scene_usd, robot_spawn_pos=(1.0, 2.0, 0.4)).scene.robot.init_state.pos == (1.0, 2.0, 0.4)
+
+
+def test_embodiment_owns_timing_spawn_height_and_contact_bodies(scene_usd):
+    """Verify physics timing, spawn height, render rates and contact bodies come from the embodiment."""
+    from dataclasses import replace
+
+    legged = replace(
+        get_embodiment("dingo"),
+        sim_dt=0.005,
+        decimation=4,
+        spawn_height=0.4,
+        contact_bodies="(base|.*_thigh)",
+    )
+    register_embodiment("timing_test_robot", legged)
+    cfg = _cfg(scene_usd, robot_name="timing_test_robot", robot_spawn_pos=(0.0, 0.0))
+    assert (cfg.sim.dt, cfg.decimation) == (0.005, 4)
+    assert cfg.scene.robot.init_state.pos == (0.0, 0.0, 0.4)
+    assert cfg.scene.contact_forces.prim_path == "{ENV_REGEX_NS}/Robot/(base|.*_thigh)"
+    # The render rates are physical (33 Hz viewport, 5 Hz with cameras), so they scale with the timestep.
+    assert cfg.sim.render_interval == 6
+    assert _cfg(scene_usd, robot_name="timing_test_robot", enable_camera=True).sim.render_interval == 40
