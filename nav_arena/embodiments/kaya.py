@@ -66,13 +66,14 @@ KAYA_ARTICULATION_CFG = ArticulationCfg(
     ),
     actuators={
         # Only the three driven axle joints get an actuator; the 30 roller joints stay passive.
+        # The Kaya USD authors damping=174.5 on the axle joints' PhysicsDriveAPI:angular.
         "wheels": ImplicitActuatorCfg(
             joint_names_expr=["axle_0_joint", "axle_1_joint", "axle_2_joint"],
-            effort_limit=10.0,
-            effort_limit_sim=10.0,
+            effort_limit=50.0,
+            effort_limit_sim=50.0,
             velocity_limit_sim=30.0,
             stiffness=0.0,
-            damping=1.0,
+            damping=174.5,
         ),
     },
 )
@@ -102,9 +103,10 @@ KAYA_ACTION_CFG = HolonomicDriveActionCfg(
 # Level camera facing +x: identity.
 _ROT_LEVEL = (0.0, 0.0, 0.0, 1.0)
 
-# Pitched 20 degrees down (rotation of −20° about the local Y axis):
-#   qx=0, qy=sin(−10°), qz=0, qw=cos(10°)
-_ROT_PITCHED_DOWN_20 = (0.0, -math.sin(math.radians(10.0)), 0.0, math.cos(math.radians(10.0)))
+# Pitched 20 degrees down in the world convention (+X forward, +Y left, +Z up):
+# Positive rotation around +Y pitches the optical axis down toward the ground.
+#   qx=0, qy=sin(+10°), qz=0, qw=cos(10°)
+_ROT_PITCHED_DOWN_20 = (0.0, math.sin(math.radians(10.0)), 0.0, math.cos(math.radians(10.0)))
 
 
 ##
