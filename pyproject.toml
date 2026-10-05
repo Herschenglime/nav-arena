@@ -10,6 +10,9 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = []
 
+[project.scripts]
+nav_arena = "nav_arena.cli:main"
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["nav_arena*"]

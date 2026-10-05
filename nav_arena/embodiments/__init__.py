@@ -1,9 +1,39 @@
-"""Robot embodiment definitions and sensor configurations."""
+# Copyright (c) 2026, nav_arena developers.
+# All rights reserved.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+"""Robot embodiment definitions, kinematic math, and embodiment registry."""
 
 from .actions import DifferentialDriveAction, DifferentialDriveActionCfg
+from .base import RobotEmbodimentCfg
+from .dingo import (
+    DINGO_ACTION_CFG,
+    DingoEmbodimentCfg,
+    create_dingo_articulation_cfg,
+)
 from .kinematics import diff_drive_fk, diff_drive_ik
-from .nova_carter import NOVA_CARTER_ACTION_CFG, NOVA_CARTER_CFG, NovaCarterEmbodimentCfg
-from .sensors import SensorSuiteCfg, create_2d_lidar_cfg
+from .nova_carter import (
+    NOVA_CARTER_ACTION_CFG,
+    NOVA_CARTER_CFG,
+    NovaCarterEmbodimentCfg,
+)
+from .registry import (
+    clear_registry,
+    get_embodiment,
+    list_embodiments,
+    register_default_embodiments,
+    register_embodiment,
+)
+from .sensors import (
+    RGBD_CAMERA_DATA_TYPES,
+    SensorSuiteCfg,
+    create_2d_lidar_cfg,
+    create_embodiment_camera_cfg,
+    create_goal_camera_cfg,
+    create_rgbd_camera_cfg,
+    pinhole_intrinsics,
+)
 from .urdf import generate_minimal_urdf
 
 __all__ = [
@@ -11,10 +41,24 @@ __all__ = [
     "DifferentialDriveActionCfg",
     "diff_drive_fk",
     "diff_drive_ik",
+    "RobotEmbodimentCfg",
+    "get_embodiment",
+    "list_embodiments",
+    "register_embodiment",
+    "clear_registry",
+    "register_default_embodiments",
     "NOVA_CARTER_CFG",
     "NOVA_CARTER_ACTION_CFG",
     "NovaCarterEmbodimentCfg",
+    "create_dingo_articulation_cfg",
+    "DINGO_ACTION_CFG",
+    "DingoEmbodimentCfg",
     "SensorSuiteCfg",
+    "RGBD_CAMERA_DATA_TYPES",
     "create_2d_lidar_cfg",
+    "create_rgbd_camera_cfg",
+    "create_embodiment_camera_cfg",
+    "create_goal_camera_cfg",
+    "pinhole_intrinsics",
     "generate_minimal_urdf",
 ]

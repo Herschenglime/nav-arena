@@ -1,0 +1,23 @@
+# Learned-baseline dependencies (iPlanner, ViNT, NavDP, X-NavDP, VIPlanner).
+#
+# Install into the existing Isaac Lab uv environment WITHOUT dependency resolution so that
+# Isaac's pinned torch / torchvision / numpy / opencv stay in place:
+#
+#   source setup.env
+#   uv pip install --python "$VIRTUAL_ENV/bin/python" --no-deps -r nav_arena/requirements/baselines.txt
+#
+# mmcv has no aarch64/CUDA 13 wheel on PyPI; see baselines-mmcv.md.
+efficientnet-pytorch==0.7.1
+diffusers==0.33.1
+gdown==5.2.0
+beautifulsoup4==4.15.0
+soupsieve==2.9.2
+PySocks==1.7.1
+# VIPlanner (Mask2Former via MMDetection)
+mmengine==0.10.7
+mmdet==3.3.0
+yapf==0.43.0
+pycocotools==2.0.11
+shapely==2.1.2
+terminaltables==3.1.10
+panopticapi @ git+https://github.com/cocodataset/panopticapi.git@7bb4655548f98f3fedc07bf37e9040a992b054b0

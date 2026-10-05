@@ -1,0 +1,16 @@
+# Copyright (c) 2026, nav_arena developers.
+# All rights reserved.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+# nav_arena/sweeps/baselines_kujiale_0003.yaml
+name: baselines_kujiale_0003
+scene: kujiale_0003
+robots: [dingo]
+methods: [iplanner, navdp, x_navdp, viplanner]
+routes: [hall_straight, around_table, through_doorway, to_far_room]   # names registered for this scene
+seeds: [0, 1, 2]
+options: {goal_tolerance: 0.4, max_speed: 0.3, max_steps: 1500, stall_timeout_s: 10}
+method_params:
+  iplanner: {fear_threshold: 0.8}
+timeout_s: 180

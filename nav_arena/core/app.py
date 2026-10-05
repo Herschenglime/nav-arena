@@ -12,6 +12,10 @@ from contextlib import contextmanager
 import sys
 from typing import Any, Generator
 
+from nav_arena.utils import get_logger
+
+logger = get_logger("simulation_app")
+
 
 def _inject_boot_flags(
     enable_ros2: bool = True,
@@ -94,7 +98,18 @@ def launch_simulation_app(
         except Exception:
             pass
 
+    exit_code = 0
     try:
         yield simulation_app
+    except SystemExit as exc:
+        # sys.exit(n) inside the block requests exit status n (None means success; other objects mean failure).
+        exit_code = exc.code if isinstance(exc.code, int) else (0 if exc.code is None else 1)
+        raise
+    except BaseException:
+        # SimulationApp.close() terminates the process, so the exception would never reach the caller's handler and
+        # the process would exit 0. Report the failure here and make sure it is reflected in the exit status.
+        exit_code = 1
+        logger.error("Unhandled exception inside the simulation app context", exc_info=True)
+        raise
     finally:
-        simulation_app.close()
+        simulation_app.close(exit_code=exit_code)

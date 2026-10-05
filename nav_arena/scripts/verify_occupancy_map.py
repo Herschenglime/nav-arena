@@ -17,7 +17,7 @@ import yaml
 from isaaclab.app import AppLauncher
 
 from nav_arena.core import launch_simulation_app
-from nav_arena.utils import add_logger_args, configure_logging, get_logger
+from nav_arena.utils import CACHE_DIR, add_logger_args, configure_logging, get_logger
 
 logger = get_logger("verify_occupancy_map")
 
@@ -25,7 +25,7 @@ logger = get_logger("verify_occupancy_map")
 parser = argparse.ArgumentParser(description="Verify 2D occupancy map generation for InteriorAgent scenes.")
 parser.add_argument("--scene", type=str, default="kujiale_0003", help="InteriorAgent scene ID or USD path.")
 parser.add_argument("--cell-size", type=float, default=0.05, help="Occupancy map grid resolution (meters/pixel).")
-parser.add_argument("--output-dir", type=str, default="nav_arena/cache/maps", help="Base directory for cached maps.")
+parser.add_argument("--output-dir", type=str, default=str(CACHE_DIR / "maps"), help="Base directory for cached maps.")
 parser.add_argument("--bounds-prim", type=str, default=None, help="Optional prim path to scope bounds calculation.")
 parser.add_argument("--force", action="store_true", help="Force regeneration even if cached map exists.")
 add_logger_args(parser)

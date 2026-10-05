@@ -14,22 +14,27 @@ from typing import Callable, Sequence
 import isaaclab.sim as sim_utils
 from isaaclab.assets import AssetBaseCfg
 from isaaclab.scene import InteractiveSceneCfg
+from isaaclab.sensors import CameraCfg
 from isaaclab.sensors.ray_caster import MultiMeshRayCasterCfg
 from isaaclab.utils.configclass import configclass
 
 from nav_arena.embodiments import (
     NOVA_CARTER_CFG,
     create_2d_lidar_cfg,
+    create_embodiment_camera_cfg,
+    create_goal_camera_cfg,
+    get_embodiment,
 )
+from nav_arena.utils.paths import CACHE_DIR, DATA_DIR
 
-DEFAULT_INTERIOR_AGENT_DIR = "/home/robopi/simulation/data/InteriorAgent"
+DEFAULT_INTERIOR_AGENT_DIR = str(DATA_DIR / "InteriorAgent")
 DEFAULT_INTERIOR_AGENT_SCENE_ID = "kujiale_0003"
 DEFAULT_INTERIOR_AGENT_USD = os.path.join(
     DEFAULT_INTERIOR_AGENT_DIR,
     DEFAULT_INTERIOR_AGENT_SCENE_ID,
     f"{DEFAULT_INTERIOR_AGENT_SCENE_ID}.usda",
 )
-DEFAULT_INTERIOR_AGENT_CACHE_DIR = "/home/robopi/simulation/nav_arena/cache/scenes"
+DEFAULT_INTERIOR_AGENT_CACHE_DIR = str(CACHE_DIR / "scenes")
 
 INTERIOR_AGENT_DOOR_PREFIX = "other/door_"
 
@@ -224,6 +229,10 @@ class InteriorAgentSceneCfg(InteractiveSceneCfg):
         ],
     )
 
+    # Optional sensors, populated by create_interior_agent_scene_cfg (None entries are skipped by the scene)
+    camera: CameraCfg | None = None
+    goal_camera: CameraCfg | None = None
+
 
 def create_interior_agent_scene_cfg(
     scene_id_or_path: str = DEFAULT_INTERIOR_AGENT_SCENE_ID,
@@ -233,6 +242,9 @@ def create_interior_agent_scene_cfg(
     num_envs: int = 1,
     env_spacing: float = 30.0,
     open_doors: bool = True,
+    robot_name: str = "nova_carter",
+    enable_camera: bool = False,
+    enable_goal_camera: bool = False,
 ) -> InteriorAgentSceneCfg:
     """Create a configured InteriorAgentSceneCfg instance.
 
@@ -244,10 +256,20 @@ def create_interior_agent_scene_cfg(
         num_envs: Number of parallel environments.
         env_spacing: Distance between environment origins in meters.
         open_doors: If True, uses the open-door delta layer to allow free passage for PhysX and LiDAR.
+        robot_name: Registered embodiment to spawn (see :func:`nav_arena.embodiments.list_embodiments`).
+        enable_camera: Mount the embodiment's RGB-D camera (requires cameras enabled at app launch).
+        enable_goal_camera: Add a free-standing RGB camera at ``/World/GoalCamera`` for goal-image rendering.
+            Only supported with a single environment.
 
     Returns:
         Configured InteriorAgentSceneCfg.
+
+    Raises:
+        ValueError: If a goal camera is requested with more than one environment.
     """
+    if enable_goal_camera and num_envs != 1:
+        raise ValueError("The goal camera is a single global prim and requires num_envs == 1")
+    embodiment = get_embodiment(robot_name)
     if open_doors:
         usd_path = get_open_door_usd(scene_id_or_path, base_dir)
     else:
@@ -260,11 +282,21 @@ def create_interior_agent_scene_cfg(
             collision_props=sim_utils.CollisionPropertiesCfg(collision_enabled=True),
         )
     )
-    cfg.robot = cfg.robot.replace(
-        init_state=cfg.robot.init_state.replace(
+    cfg.robot = embodiment.articulation_cfg.replace(
+        prim_path="{ENV_REGEX_NS}/Robot",
+        init_state=embodiment.articulation_cfg.init_state.replace(
             pos=robot_spawn_pos,
             rot=robot_spawn_rot,
-        )
+        ),
     )
+    # Sensors attach to the embodiment's USD body link (chassis_link for the Carter, base_link for the Dingo).
+    cfg.lidar = cfg.lidar.replace(
+        prim_path=f"{{ENV_REGEX_NS}}/Robot/{embodiment.body_link}",
+        offset=cfg.lidar.offset.replace(pos=tuple(embodiment.lidar_offset)),
+    )
+    if enable_camera:
+        cfg.camera = create_embodiment_camera_cfg(embodiment)
+    if enable_goal_camera:
+        cfg.goal_camera = create_goal_camera_cfg(embodiment)
     return cfg
 

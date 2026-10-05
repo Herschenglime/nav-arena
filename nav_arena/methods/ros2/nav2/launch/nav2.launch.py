@@ -18,13 +18,13 @@ from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.substitutions import FindPackageShare
 from nav2_common.launch import RewrittenYaml
 
+from nav_arena.utils.paths import CACHE_DIR
+
 
 def generate_launch_description() -> LaunchDescription:
     # Default paths
-    base_nav_arena_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
     default_map_path = os.path.join(
-        base_nav_arena_dir,
-        "cache",
+        CACHE_DIR,
         "maps",
         "kujiale_0003",
         "cs0.05_z0.01-0.60",

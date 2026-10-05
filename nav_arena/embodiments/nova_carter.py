@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any, Callable
 
 import isaaclab.sim as sim_utils
 from isaaclab.actuators import ImplicitActuatorCfg
@@ -15,6 +16,8 @@ from isaaclab.assets.articulation import ArticulationCfg
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
 from .actions import DifferentialDriveActionCfg
+from .base import RobotEmbodimentCfg
+from .registry import register_embodiment
 
 ##
 # Articulation Configuration
@@ -77,19 +80,24 @@ NOVA_CARTER_ACTION_CFG = DifferentialDriveActionCfg(
 
 
 @dataclass
-class NovaCarterEmbodimentCfg:
+class NovaCarterEmbodimentCfg(RobotEmbodimentCfg):
     """Convenience container coupling the Nova Carter robot and its action term."""
 
+    name: str = "nova_carter"
     articulation_cfg: ArticulationCfg = field(default_factory=lambda: NOVA_CARTER_CFG)
     action_cfg: DifferentialDriveActionCfg = field(default_factory=lambda: NOVA_CARTER_ACTION_CFG)
-    name: str = "nova_carter"
     wheel_radius: float = 0.14
     wheel_base: float = 0.413
+    max_linear_speed: float = 2.0
+    max_angular_speed: float = 3.0
     base_frame: str = "base_link"
     chassis_frame: str = "chassis_link"
     lidar_frame: str = "lidar_link"
+    camera_frame: str = "camera_link"
     sensor_height: float = 0.35
     lidar_offset: tuple[float, float, float] = (0.0, 0.0, 0.35)
+    camera_offset: tuple[float, float, float] = (0.0, 0.0, 0.35)
+    camera_rot: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0)
     # Footprint polygon relative to base_link: [[x, y], ...]
     # Nova Carter chassis extends +0.14m forward and -0.607m rearward, ±0.25m lateral
     footprint: tuple[tuple[float, float], ...] = (
@@ -102,4 +110,8 @@ class NovaCarterEmbodimentCfg:
     chassis_offset: tuple[float, float, float] = (-0.2335, 0.0, 0.20)  # center of box relative to base_link
     robot_radius: float = 0.28  # nominal half-width radius (for circular costmap approximations)
     robot_height: float = 0.40
+    stage_patch_fn: Callable[[Any], None] | None = None
 
+
+# Register default embodiment
+register_embodiment("nova_carter", NovaCarterEmbodimentCfg)

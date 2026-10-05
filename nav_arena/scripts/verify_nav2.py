@@ -30,7 +30,7 @@ parser.add_argument("--goal-y", type=float, default=0.0, help="Navigation goal Y
 parser.add_argument("--goal-yaw", type=float, default=0.0, help="Navigation goal heading (rad). Default: 0.0")
 
 from nav_arena.core import launch_simulation_app
-from nav_arena.utils import add_logger_args, configure_logging, get_logger, managed_process
+from nav_arena.utils import LOG_DIR, add_logger_args, configure_logging, get_logger, managed_process
 
 logger = get_logger("verify_nav2")
 
@@ -133,7 +133,7 @@ def run_nav2_verification(simulation_app):
 
     # 8. Launch Nav2 stack via ros2 launch
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    launch_script = os.path.abspath(os.path.join(script_dir, "..", "methods", "nav2", "launch", "nav2.launch.py"))
+    launch_script = os.path.abspath(os.path.join(script_dir, "..", "methods", "ros2", "nav2", "launch", "nav2.launch.py"))
     nav2_cmd = [
         sys.executable,
         "/opt/ros/jazzy/bin/ros2",
@@ -146,7 +146,7 @@ def run_nav2_verification(simulation_app):
         f"initial_pose_yaw:={args_cli.spawn_yaw}",
     ]
     logger.info(f"Starting Nav2 process: {' '.join(nav2_cmd)}")
-    log_file_path = "/home/robopi/simulation/nav2_bringup.log"
+    log_file_path = str(LOG_DIR / "nav2_bringup.log")
     log_file = open(log_file_path, "w")
 
     try:
