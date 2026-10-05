@@ -115,3 +115,21 @@ x = -3.55 m, where iPlanner's predicted collision "fear" crosses its 0.7 stop th
 stopped it keeps seeing the same view (fear 0.85) and never resumes. In the old run fear peaked at 0.63 at the same spot,
 just under the threshold. So the old "goal_reached" was marginal: a centimetre-scale change in the start flips the outcome.
 Single-route, single-start results are fragile; comparisons between methods should use several starts or seeds.
+
+## Phase 2: Go2 (2026-10-05)
+
+`PointNavTask.step`/`reset` now run under `torch.inference_mode()`; the Dingo, Nova Carter and Kaya per-plan logs are
+identical to the table above (checked), so that table stays the baseline.
+
+`verify_baseline --method iplanner --route hall_straight`, seed 0:
+
+| Field | go2 |
+|---|---|
+| settle_s | 4.5 (drops from 0.4 m and stands) |
+| terminal_cause | goal_reached |
+| steps | 1001 |
+| final_goal_distance_m | 0.404 |
+| path_length_m | 5.62 |
+| plans | 101 |
+
+`verify_task --camera` for go2: goal at step 104, collision at step 97, 0 N horizontal contact force while walking.

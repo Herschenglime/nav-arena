@@ -7,7 +7,7 @@ Update this file in the same commit as the work it describes, so it always match
 - **Rules:** commit locally, never push (the user pushes). Headless sims via `./agy_python.sh` are OK; GUI checks
   and the Nav2 regression are the user's. Install packages only into `env_isaaclab` with `uv pip --no-deps`.
 - **Last updated:** 2026-10-05
-- **Next action:** Phase 2 step 2-3 (register go2, `lidar_ray_alignment`, verify_embodiment at the embodiment's dt)
+- **Next action:** none planned; Phases 0-2 complete. Open follow-ups are under "Future work" in the plan and in the notes below
 
 ## Phase 0: drive-agnostic base (diff-drive results must not change)
 
@@ -74,16 +74,35 @@ Update this file in the same commit as the work it describes, so it always match
   (`EpisodeCfg.settle`; raises if the episode ends or the robot never settles) and by `verify_embodiment`. Settle time is
   recorded in `settings.json`. Baseline re-recorded: Dingo now STALLS on hall_straight (iPlanner fear 0.71 vs threshold 0.7
   at x = -3.55; it was 0.63 before) -> the old success was marginal; see the baseline doc.
-- [ ] 1. `embodiments/policies.py`: fetch and cache `physx_policy.pt`, verify SHA-256 `984c802b…abe0f`, env override
-- [ ] 2. `embodiments/go2.py` with `PreTrainedPolicyActionCfg` (`debug_vis=False`, `low_level_decimation=4`)
-- [ ] 3. `lidar_ray_alignment` field (`yaw` for Go2)
-- [ ] 4. Checks on `PreTrainedPolicyAction` as-is (joint order, lambdas not serialized by the worker)
-- [ ] 5. Quadruped checks in `verify_embodiment.py` (10 s stand, per-axis tracking)
-- [ ] 6. `tests/integration/test_integration_go2.py`
-- [ ] 7. Closed loop `verify_baseline` for go2 vs nova_carter
-- [ ] Docs updated; Phase 2 committed
+- [x] 1. `embodiments/policies.py`: `ensure_policy` downloads `physx_policy.pt` once into `cache/policies/go2_flat/`, verifies
+  SHA-256 `984c802b...abe0f` on every use; `NAV_ARENA_GO2_POLICY` override for offline use (same hash required); 6 unit tests
+- [x] 2. `embodiments/go2.py`: Isaac Lab's `PreTrainedPolicyActionCfg` used as-is (`debug_vis=False`, `low_level_decimation=4`).
+  Robot, observations, actions and dt all come from `training_env_cfg()` = `resolve_presets(UnitreeGo2FlatEnvCfg_PLAY())`
+  (presets must be resolved, as Isaac Lab's scripts do; it also sets armature 0). Registered lazily as `go2`
+- [x] 3. `lidar_ray_alignment` field (`base` | `yaw`; `yaw` for Go2), wired through `create_2d_lidar_cfg`, the scene and
+  `verify_embodiment`; `verify_embodiment` now runs physics at the embodiment's `sim_dt`
+- [x] 4. `PreTrainedPolicyAction` as-is: joint order OK (tracks 96-104% of commands); env cfg is never serialized (only specs).
+  It needs **inference mode**: the policy output carries autograd state, which the warp backend rejects. `PointNavTask.step` and
+  `.reset` now run under `torch.inference_mode()` (as Isaac Lab's play scripts do; reset too, or buffers created in a step
+  cannot be updated in place). No numerical change for the other robots (per-plan logs identical)
+- [x] 5. Quadruped checks in `verify_embodiment.py`: 10 s zero-command stand (drift 0.6 mm, base height steady), per-axis
+  tracking: vx 96-97%, vy 104%, wz 75-93% (varies run to run), turning centre within 2 cm
+- [x] 6. `tests/integration/test_integration_go2.py` (stand + axes + camera; task; iPlanner closed loop)
+- [x] 7. Closed loop `verify_baseline` iplanner hall_straight: go2 goal_reached (1001 steps, path 5.62 m); see baseline doc
+- [x] 8. End-to-end through the CLI (`nav_arena run --method iplanner --robot go2 --route hall_straight`): goal_reached in
+  20.0 s, 101 plans, 5.62 m (same as verify_baseline). Found and fixed a stale progress-log line (printed v=0 since Phase 0)
+- [x] Docs updated (guide: legged-robot section; README); Phase 2 committed. Verified: 536 unit tests; full integration suite
+  13 passed (go2 3, kaya 4, dingo, task, occupancy, tf_tree)
 
 ## Notes and decisions log
+
+- 2026-10-05: open follow-ups: (1) single-start results are fragile (Dingo flips goal_reached -> stalled on a 1.5 cm start
+  change; iPlanner fear 0.63 vs 0.71 at the 0.7 threshold) -> compare methods over several starts/seeds; (2) nova_carter's
+  camera sees its own chassis (pre-existing); (3) Nav2 for kaya/go2; (4) lab mecanum robot via URDF.
+
+- 2026-10-05: Go2 stands crouched at a zero command (base 0.22 m, legs asymmetric). Checked against the same policy in Isaac
+  Lab's own training env: identical (0.222 m), so it is the policy's stance, not our setup. Actuators match training
+  (DCMotor Kp 25, Kd 0.5, 23.5 N m).
 
 - 2026-10-05: review of the Phase 1 handoff found false checklist claims (drift check, HolonomicController cross-check), a
   variant-data bug, and a broken rotation check; all fixed and verified (see Phase 1 items 5-7).

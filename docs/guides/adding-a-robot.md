@@ -11,8 +11,9 @@ Existing examples to copy from: [`embodiments/nova_carter.py`](../../nav_arena/e
 
 Every embodiment takes the same command, the body-frame twist `[vx, vy, wz]` (forward m/s, left m/s, yaw rad/s). A
 differential drive ignores `vy`; holonomic and legged robots use it. What differs per robot is how the twist becomes
-joint targets (the action term), its limits, and its physics timing. Both differential and holonomic drives are implemented
-end to end; adding quadruped robots is covered in [Adding a new drive type](#adding-a-new-drive-type).
+joint targets (the action term), its limits, and its physics timing. Differential (Nova Carter, Dingo), holonomic (Kaya) and quadruped
+(Go2) drives are implemented end to end; see [Adding a new drive type](#adding-a-new-drive-type) and
+[Legged robots](#legged-robots-policy-driven).
 
 ## 1. Inspect the USD first
 
@@ -271,3 +272,30 @@ A new drive type needs:
 
 Drive-specific validation: `verify_embodiment.py` already commands each axis separately (see step 2 of the
 validation list); a new drive type adds its own axes or limits there, then a `verify_baseline` run.
+
+## Legged robots (policy-driven)
+
+A legged robot walks on a locomotion policy trained in Isaac Lab; the body twist is the policy's velocity command.
+[`embodiments/go2.py`](../../nav_arena/embodiments/go2.py) is the example. What it takes:
+
+1. **A pinned policy file.** Add a `PolicyArtifact` (URL, SHA-256, override variable) to
+   [`embodiments/policies.py`](../../nav_arena/embodiments/policies.py); `ensure_policy` downloads it once into
+   `cache/policies/` and checks the hash on every use. A different file is a different robot, so never load an unpinned one.
+2. **Everything from the training task.** Build the embodiment from the Isaac Lab task the policy was trained in, with its
+   presets resolved (`resolve_presets(...)`, as Isaac Lab's scripts do; unresolved presets fail at spawn): the robot config
+   (actuators, armature, default pose), `sim.dt` and `decimation`, the policy observations (with noise off) and the
+   low-level action. A copy that "looks the same" can drift from training silently.
+3. **The action term as-is.** Use Isaac Lab's `PreTrainedPolicyActionCfg` with `debug_vis=False` (its velocity arrows are
+   real geometry the depth camera would see). Its `low_level_decimation` times the physics `dt` must equal the training
+   control period. Build a fresh config per embodiment instance: the action term rewrites its observation config.
+4. **Inference mode.** The policy's output carries autograd state, which the physics backend rejects. `PointNavTask.step`
+   and `reset` therefore run under `torch.inference_mode()`, as Isaac Lab's play scripts do; any other loop that steps an
+   env or an action manager directly must do the same (see `verify_embodiment.py`).
+5. **Embodiment fields.** `drive_type="quadruped"`, speed limits inside the policy's training command range, the training
+   spawn height, `contact_bodies` covering the body and legs but not the feet, `ground_contact_on_body=True` (contact
+   forces are normal forces, so a leg grazing the floor reads vertical and is ignored), and `lidar_ray_alignment="yaw"`
+   so the scan stays level while the body pitches.
+
+Validation is the same `verify_embodiment` run, plus a 10 s zero-command stand (no fall, little drift). If the robot's
+posture looks odd, compare against the policy in its own training env before changing anything: Go2 stands crouched
+(base about 0.22 m up) at a zero command, and does exactly the same in Isaac Lab's training env.

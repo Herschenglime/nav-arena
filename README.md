@@ -138,12 +138,13 @@ python -u nav_arena/nav_arena/scripts/verify_nav2.py --spawn-x -2.5 --spawn-y 0.
 ```
 
 ### Embodiment Verification
-Validates a registered embodiment's kinematics (differential or holonomic), exercises drive action terms, reads 2D LiDAR range arrays, and validates displacement. `--robot` selects any registered embodiment (`nova_carter` by default, `dingo`, or `kaya`); `--camera` additionally mounts the RGB-D camera and checks the RGB / metric-depth tensors:
+Validates a registered embodiment's drive (differential, holonomic or quadruped): the robot must settle and hold still, then track each commanded axis; it also reads the 2D LiDAR. `--robot` selects any registered embodiment (`nova_carter` by default, `dingo`, `kaya` / `kaya.native`, or `go2`; `nav_arena robots list` shows them all); `--camera` additionally mounts the RGB-D camera and checks the RGB / metric-depth tensors:
 ```bash
 source setup.env
 python -u nav_arena/nav_arena/scripts/verify_embodiment.py
 python -u nav_arena/nav_arena/scripts/verify_embodiment.py --robot dingo --camera
 python -u nav_arena/nav_arena/scripts/verify_embodiment.py --robot kaya --camera
+python -u nav_arena/nav_arena/scripts/verify_embodiment.py --robot go2 --camera
 ```
 
 ### Learned Baseline In-Process Verifier (Developer Shim)
@@ -332,9 +333,12 @@ nav_arena/
 │   │   ├── assets.py                  # Derived robot USDs: upstream sublayer + baked-in fixes
 │   │   ├── base.py                    # RobotEmbodimentCfg (frames, geometry, sensors, body_link)
 │   │   ├── dingo.py                   # Clearpath Dingo differential base configuration
+│   │   ├── go2.py                     # Unitree Go2 quadruped on NVIDIA's pretrained locomotion policy
 │   │   ├── kaya.py                    # NVIDIA Kaya 3-omni holonomic base configuration
+│   │   ├── kaya_variants.py           # Kaya's variants (mast / native camera), pure data
 │   │   ├── kinematics.py              # Pure math differential & holonomic kinematics (FK & IK)
 │   │   ├── nova_carter.py             # Nova Carter differential base configuration
+│   │   ├── policies.py                # Pinned, cached locomotion policies (SHA-256 checked)
 │   │   ├── registry.py                # register_embodiment / get_embodiment / list_embodiments
 │   │   ├── sensors.py                 # Planar 2D LiDAR raycaster and RGB-D pinhole camera configuration
 │   │   ├── urdf.py                    # Programmatic URDF string synthesis
