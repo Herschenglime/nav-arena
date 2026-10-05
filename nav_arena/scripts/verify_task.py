@@ -153,8 +153,9 @@ def run_verification():
 
         curr_dist = task.get_goal_distance()
         rx, ry, rh = task.get_robot_pose_w()
-        free_drive_forces = task.scene.sensors["contact_forces"].data.net_forces_w.torch[:, 0]
-        max_lateral_force = max(max_lateral_force, float(torch.linalg.norm(free_drive_forces[:, :2], dim=-1).max()))
+        # Every sensed body (Kaya senses its wheels and rollers too): [envs, bodies, 3] -> worst horizontal force.
+        free_drive_forces = task.scene.sensors["contact_forces"].data.net_forces_w.torch
+        max_lateral_force = max(max_lateral_force, float(torch.linalg.norm(free_drive_forces[..., :2], dim=-1).max()))
 
         if step % 20 == 0 or task.is_goal_reached():
             logger.info(f"Step {step:03d}: Robot=({rx:.2f}, {ry:.2f}) Dist={curr_dist:.2f}m Term={terminated.item()} (goal={task.is_goal_reached()}, coll={task.is_collision()})")

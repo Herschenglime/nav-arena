@@ -79,6 +79,64 @@ def verify_camera(sim, camera, embodiment) -> None:
     logger.check("Nearest ground return is plausible", True, f"min_depth={near:.2f} m")
 
 
+def verify_holonomic_reference(robot, action_term, embodiment) -> None:
+    """Check our wheel speeds against Isaac Sim's own HolonomicController, built the way its Kaya example builds it.
+
+    The reference reads the wheel layout from the USD with Isaac Sim's HolonomicRobotUsdSetup (independent of our
+    reader) and takes the command at ``base_link/control_offset``, the same point as our action term's command frame.
+    """
+    import numpy as np
+    import warp as wp
+
+    import isaaclab.sim as sim_utils
+    import omni.kit.app
+
+    # Pure-Python extensions (no USD schemas), so enabling them after boot is fine (unlike omni.graph / ROS 2).
+    manager = omni.kit.app.get_app().get_extension_manager()
+    for extension in ("isaacsim.robot_motion.controllers", "isaacsim.robot.experimental.wheeled_robots"):
+        manager.set_extension_enabled_immediate(extension, True)
+    import isaacsim.robot_motion.controllers as motion_controllers
+    import isaacsim.robot_motion.experimental.motion_generation as mg
+    from isaacsim.robot.experimental.wheeled_robots.robots import HolonomicRobotUsdSetup
+
+    from nav_arena.embodiments.kinematics import holonomic_ik
+
+    root = sim_utils.find_first_matching_prim(robot.cfg.prim_path).GetPath().pathString
+    setup = HolonomicRobotUsdSetup(robot_prim_path=root, com_prim_path=f"{root}/{embodiment.body_link}/control_offset")
+    radius, positions, orientations, angles, wheel_axis, up_axis = setup.get_holonomic_controller_params()
+    wheel_names = list(setup.get_articulation_controller_params())
+    controller = motion_controllers.HolonomicController(
+        robot_joint_space=list(robot.joint_names),
+        wheel_joint_names=wheel_names,
+        wheel_radius=radius,
+        wheel_positions=positions,
+        wheel_orientations=orientations,
+        mecanum_angles=angles,
+        wheel_axis=wheel_axis,
+        rotation_direction=up_axis,
+        device="cpu",
+    )
+    ours_order = list(action_term.cfg.wheel_joint_names)
+    twists = [(0.3, 0.0, 0.0), (0.0, 0.3, 0.0), (0.0, 0.0, 1.0), (0.2, -0.1, 0.5), (-0.25, 0.15, -0.8)]
+    worst = 0.0
+    for twist in twists:
+        setpoint = mg.RobotState(
+            sites=mg.SpatialState.from_name(
+                spatial_space=["control_point"],
+                linear_velocities=(["control_point"], wp.array([[twist[0], twist[1], 0.0]], dtype=wp.float32, device="cpu")),
+                angular_velocities=(["control_point"], wp.array([[0.0, 0.0, twist[2]]], dtype=wp.float32, device="cpu")),
+            )
+        )
+        desired = controller.forward(mg.RobotState(), setpoint, 0.0)
+        reference = dict(zip(desired.joints.velocity_names, np.asarray(desired.joints.velocities.numpy()).reshape(-1)))
+        ours = holonomic_ik(torch.tensor([twist], dtype=torch.float32), action_term.wheel_matrix.cpu())[0]
+        for name, value in zip(ours_order, ours.tolist()):
+            worst = max(worst, abs(value - float(reference[name])))
+    passed = worst < 1e-3
+    logger.check("Wheel speeds match Isaac Sim's HolonomicController", passed, f"max |difference| = {worst:.2e} rad/s over {len(twists)} twists")
+    assert passed, f"Our holonomic kinematics disagree with Isaac Sim's HolonomicController by {worst:.3e} rad/s"
+
+
 def run_verification(simulation_app):
     import isaaclab.sim as sim_utils
     from isaaclab.assets import Articulation, AssetBaseCfg
@@ -257,6 +315,9 @@ def run_verification(simulation_app):
     if embodiment.max_lateral_speed > 0.0:
         commands.append(("Strafe drive (vy)", [0.0, min(0.3, embodiment.max_lateral_speed), 0.0]))
     commands.append(("In-place rotation (wz)", [0.0, 0.0, min(1.0, embodiment.max_angular_speed)]))
+    if embodiment.drive_type == "holonomic":
+        verify_holonomic_reference(robot, action_manager._terms["robot_action"], embodiment)
+
     for label, command in commands:
         # A rotation is measured after a longer spin-up: swivel casters (Nova Carter) re-orient at the start of a turn,
         # moving the turning centre by ~8 cm over the first second; after 1.5 s it holds within millimetres.

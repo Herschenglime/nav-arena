@@ -39,6 +39,7 @@ def test_kaya_embodiment_with_mast_camera():
     result = _run("verify_embodiment.py", "--robot", "kaya", "--camera", timeout=300)
     _assert_ok(result, "verify_embodiment.py --robot kaya")
     assert "[PASS] Zero-command hold" in result.stdout
+    assert "[PASS] Wheel speeds match Isaac Sim's HolonomicController" in result.stdout
     for check in ("Forward drive (vx)", "Strafe drive (vy)", "In-place rotation (wz)"):
         assert f"[PASS] HolonomicDriveAction {check}" in result.stdout, check
     assert "Camera resolution is 640x360" in result.stdout
