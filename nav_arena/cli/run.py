@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import dataclasses
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -28,7 +29,7 @@ from nav_arena.benchmarks.spec import (
     validate_spec,
 )
 from nav_arena.benchmarks.sweep import check_preflight_processes
-from nav_arena.cli._common import CliError
+from nav_arena.cli._common import CliError, canonical_robot
 from nav_arena.utils.logger import get_logger
 from nav_arena.utils.paths import RUNS_DIR
 from nav_arena.utils.run_dir import recorded_artifacts
@@ -190,6 +191,7 @@ def handle_run(args: argparse.Namespace) -> int:
             validate_spec(spec)
         except ValueError as exc:
             raise CliError(f"Spec validation error: {exc}") from exc
+        spec = dataclasses.replace(spec, robot=canonical_robot(spec.robot))
     except CliError as exc:
         logger.error("%s", exc)
         return 1
@@ -262,7 +264,13 @@ def _add_run_subcommand_args(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Navigation policy to evaluate.",
     )
-    parser.add_argument("--robot", type=str, default=None, help="Embodiment name (default: dingo).")
+    parser.add_argument(
+        "--robot",
+        type=str,
+        default=None,
+        help="Embodiment name (default: dingo). A robot with variants runs its default variant; pick another "
+        "as <robot>.<variant>. See 'nav_arena robots list'.",
+    )
     parser.add_argument("--scene", type=str, default=None, help="Scene ID or USD path (default: kujiale_0003).")
     parser.add_argument("--route", type=str, default=None, help="Named route for the scene.")
     parser.add_argument(

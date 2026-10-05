@@ -80,6 +80,31 @@ class TestCliRunArgParsing:
         assert spec_dict["viz"]["follow_camera"] is True
         assert spec_dict["viz"]["goal_overlay"] is False
 
+    def test_run_records_the_canonical_robot_name(self, tmp_path: Path):
+        from nav_arena.embodiments import EmbodimentVariant, RobotEmbodimentCfg, clear_registry, register_default_embodiments, register_embodiment
+
+        register_embodiment(
+            "canon_run_bot",
+            RobotEmbodimentCfg(),
+            variants=[EmbodimentVariant("mast"), EmbodimentVariant("native")],
+            default_variant="mast",
+        )
+        try:
+            with patch("nav_arena.cli.run.execute_single_run_process", return_value=0) as run:
+                assert main(["run", "--method", "iplanner", "--robot", "canon_run_bot", "--output", str(tmp_path / "r"), "--force"]) == 0
+                assert run.call_args.kwargs["spec"].robot == "canon_run_bot.mast"
+            with patch("nav_arena.cli.run.execute_single_run_process", return_value=0) as run:
+                assert main(["run", "--method", "iplanner", "--robot", "canon_run_bot.native", "--output", str(tmp_path / "r2"), "--force"]) == 0
+                assert run.call_args.kwargs["spec"].robot == "canon_run_bot.native"
+        finally:
+            clear_registry()
+            register_default_embodiments()
+
+    def test_run_rejects_an_unknown_robot_before_starting_anything(self, tmp_path: Path):
+        with patch("nav_arena.cli.run.execute_single_run_process") as run:
+            assert main(["run", "--method", "iplanner", "--robot", "dingoo", "--output", str(tmp_path / "r"), "--force"]) == 1
+            run.assert_not_called()
+
     def test_run_custom_coordinates(self, tmp_path: Path):
         run_output = tmp_path / "coords_run"
         argv = [

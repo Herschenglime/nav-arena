@@ -288,6 +288,77 @@ class TestCliRoutesSubcommands:
         assert res.returncode == 0, f"Routes list leaked heavy modules:\n{res.stdout}\n{res.stderr}"
 
 
+class TestCliRobotsSubcommands:
+    """Test 'robots list' and robot-name canonicalization."""
+
+    @pytest.fixture(autouse=True)
+    def _restore_registry(self):
+        from nav_arena.embodiments import clear_registry, register_default_embodiments
+
+        yield
+        clear_registry()
+        register_default_embodiments()
+
+    def test_robots_list_shows_every_robot_with_its_drive(self, capsys: pytest.CaptureFixture[str]):
+        assert main(["robots", "list"]) == 0
+        out = capsys.readouterr().out
+        assert "dingo" in out and "nova_carter" in out and "diff" in out
+
+    def test_robots_list_marks_the_default_variant(self, capsys: pytest.CaptureFixture[str]):
+        from nav_arena.embodiments import EmbodimentVariant, RobotEmbodimentCfg, register_embodiment
+
+        register_embodiment(
+            "listing_bot",
+            RobotEmbodimentCfg(),
+            variants=[EmbodimentVariant("mast", "Virtual mast."), EmbodimentVariant("native", "Real pose.")],
+            default_variant="mast",
+            drive_type="holonomic",
+        )
+        assert main(["robots", "list"]) == 0
+        rows = {
+            cells[2]: cells
+            for cells in ([c.strip() for c in line.strip("| \n").split("|")] for line in capsys.readouterr().out.splitlines())
+            if cells[0] == "listing_bot"
+        }
+        assert rows["mast"][1] == "holonomic" and rows["mast"][3] == "yes" and rows["mast"][4] == "Virtual mast."
+        assert rows["native"][3] == ""
+
+    def test_robots_no_action_prints_help(self):
+        assert main(["robots"]) == 1
+
+    def test_canonical_robot_pins_the_default_variant(self):
+        from nav_arena.cli._common import canonical_robot
+        from nav_arena.embodiments import EmbodimentVariant, RobotEmbodimentCfg, register_embodiment
+
+        register_embodiment(
+            "canon_bot",
+            RobotEmbodimentCfg(),
+            variants=[EmbodimentVariant("mast"), EmbodimentVariant("native")],
+            default_variant="mast",
+        )
+        assert canonical_robot("canon_bot") == "canon_bot.mast"
+        assert canonical_robot("canon_bot.native") == "canon_bot.native"
+        assert canonical_robot("dingo") == "dingo"
+
+    def test_canonical_robot_rejects_typos_with_a_pointer_to_the_listing(self):
+        from nav_arena.cli._common import CliError, canonical_robot
+
+        with pytest.raises(CliError, match="robots list"):
+            canonical_robot("dingoo")
+
+    def test_robots_list_zero_heavy_imports(self):
+        code = (
+            "import sys\n"
+            "from nav_arena.cli import main\n"
+            "assert main(['robots', 'list']) == 0\n"
+            "forbidden = {'isaacsim', 'isaaclab', 'omni', 'pxr', 'rclpy', 'torch'}\n"
+            "loaded = forbidden.intersection(m.split('.')[0] for m in sys.modules)\n"
+            "assert not loaded, f'Heavy modules loaded in robots list: {loaded}'\n"
+        )
+        res = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+        assert res.returncode == 0, f"robots list leaked heavy modules:\n{res.stdout}\n{res.stderr}"
+
+
 # ==============================================================================
 # 3. CLI Map Subcommands
 # ==============================================================================
@@ -383,3 +454,36 @@ class TestCliDoctorWiring:
             assert code == 0
             assert mock_doc.called
             assert mock_doc.call_args[1].get("verbose") is True
+
+
+class TestCliSweepRobotNames:
+    """The sweep CLI canonicalizes and validates robot names like 'run' does."""
+
+    def test_sweep_robots_are_canonicalized_and_typos_rejected(self, tmp_path):
+        from unittest.mock import patch
+
+        from nav_arena.embodiments import (
+            EmbodimentVariant,
+            RobotEmbodimentCfg,
+            clear_registry,
+            register_default_embodiments,
+            register_embodiment,
+        )
+
+        register_embodiment(
+            "canon_sweep_bot",
+            RobotEmbodimentCfg(),
+            variants=[EmbodimentVariant("mast"), EmbodimentVariant("native")],
+            default_variant="mast",
+        )
+        try:
+            with patch("nav_arena.cli.sweep.execute_sweep", return_value=0) as sweep:
+                argv = ["sweep", "--robots", "canon_sweep_bot,canon_sweep_bot.native,dingo", "--methods", "iplanner"]
+                assert main(argv) == 0
+                assert sweep.call_args.args[0].robots == ["canon_sweep_bot.mast", "canon_sweep_bot.native", "dingo"]
+            with patch("nav_arena.cli.sweep.execute_sweep") as sweep:
+                assert main(["sweep", "--robots", "dingo,dingoo", "--methods", "iplanner"]) == 1
+                sweep.assert_not_called()
+        finally:
+            clear_registry()
+            register_default_embodiments()

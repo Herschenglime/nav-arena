@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The 'doctor', 'routes', and 'map' subcommands."""
+"""The 'doctor', 'routes', 'robots', and 'map' subcommands."""
 
 from __future__ import annotations
 
@@ -109,6 +109,42 @@ def handle_routes(args: argparse.Namespace) -> int:
     else:
         logger.error("Unknown routes action '%s'", action)
         return 1
+
+
+def handle_robots_list(args: argparse.Namespace) -> int:
+    """Handle 'robots list' subcommand: every robot with its variants (default marked)."""
+    from nav_arena.embodiments import default_variant, drive_type_of, list_embodiments, list_variants
+
+    headers = ["Robot", "Drive", "Variant", "Default", "Description"]
+    rows = []
+    for name in list_embodiments():
+        drive = drive_type_of(name) or "?"
+        variants = list_variants(name)
+        if not variants:
+            rows.append([name, drive, "-", "-", ""])
+            continue
+        for variant in variants:
+            is_default = "yes" if variant.name == default_variant(name) else ""
+            rows.append([name, drive, variant.name, is_default, variant.description])
+
+    widths = [max(len(h), *(len(row[i]) for row in rows)) for i, h in enumerate(headers)]
+    print("Registered robots (select a variant as <robot>.<variant>; the bare name selects the default):")
+    print("| " + " | ".join(h.ljust(widths[i]) for i, h in enumerate(headers)) + " |")
+    print("|-" + "-|-".join("-" * w for w in widths) + "-|")
+    for row in rows:
+        print("| " + " | ".join(row[i].ljust(widths[i]) for i in range(len(row))) + " |")
+    return 0
+
+
+def handle_robots(args: argparse.Namespace) -> int:
+    """Dispatch 'robots' subcommands."""
+    action = getattr(args, "robots_action", None)
+    if action is None:
+        return print_subcommand_help("robots")
+    if action == "list":
+        return handle_robots_list(args)
+    logger.error("Unknown robots action '%s'", action)
+    return 1
 
 
 def handle_map_generate(args: argparse.Namespace) -> int:
@@ -234,6 +270,16 @@ def add_routes_parser(subparsers: argparse._SubParsersAction) -> None:
         default="kujiale_0003",
         help="Scene ID (default: kujiale_0003).",
     )
+
+
+def add_robots_parser(subparsers: argparse._SubParsersAction) -> None:
+    """Register the 'robots' subcommand."""
+    robots_parser = subparsers.add_parser(
+        "robots",
+        help="List registered robots and their variants.",
+    )
+    robots_sub = robots_parser.add_subparsers(dest="robots_action", metavar="ACTION")
+    robots_sub.add_parser("list", help="List robots, their drive types and variants.")
 
 
 def add_map_parser(subparsers: argparse._SubParsersAction) -> None:

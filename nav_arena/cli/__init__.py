@@ -23,9 +23,11 @@ from nav_arena.cli.sweep import add_sweep_parser, handle_sweep
 from nav_arena.cli.tools import (
     add_doctor_parser,
     add_map_parser,
+    add_robots_parser,
     add_routes_parser,
     handle_doctor,
     handle_map,
+    handle_robots,
     handle_routes,
 )
 
@@ -35,6 +37,7 @@ _HANDLERS = {
     "runs": handle_runs,
     "doctor": handle_doctor,
     "routes": handle_routes,
+    "robots": handle_robots,
     "map": handle_map,
 }
 
@@ -51,6 +54,7 @@ def create_parser() -> argparse.ArgumentParser:
     add_runs_parser(subparsers)
     add_doctor_parser(subparsers)
     add_routes_parser(subparsers)
+    add_robots_parser(subparsers)
     add_map_parser(subparsers)
     return parser
 

@@ -288,3 +288,126 @@ def test_contact_body_expr_defaults_to_body_link():
     cfg = RobotEmbodimentCfg(body_link="base_link")
     assert cfg.contact_body_expr == "base_link"
     assert RobotEmbodimentCfg(body_link="base", contact_bodies="(base|.*_calf)").contact_body_expr == "(base|.*_calf)"
+
+
+# ==============================================================================
+# Embodiment variants
+# ==============================================================================
+
+
+def _register_two_variant_robot(**kwargs):
+    """Register a robot whose camera sits on a mast by default and at a low native pose in the other variant."""
+    from nav_arena.embodiments import EmbodimentVariant
+
+    base = RobotEmbodimentCfg(camera_offset=(0.0, 0.0, 0.30))
+    register_embodiment(
+        "variant_bot",
+        base,
+        variants=[
+            EmbodimentVariant("mast", "Camera on a virtual mast.", {"camera_offset": (0.0, 0.0, 0.30)}),
+            EmbodimentVariant("native", "Real sensor pose.", {"camera_offset": (0.05, 0.0, 0.10)}),
+            EmbodimentVariant("blind", "No camera.", {"sensors": ("lidar",)}),
+        ],
+        default_variant=kwargs.get("default_variant", "mast"),
+    )
+
+
+def test_bare_name_resolves_to_the_default_variant_and_dotted_name_to_another():
+    """Verify `robot` selects the default variant and `robot.variant` any other, each with its overrides applied."""
+    _register_two_variant_robot()
+    default = get_embodiment("variant_bot")
+    assert (default.name, default.variant, default.full_name) == ("variant_bot", "mast", "variant_bot.mast")
+    assert default.camera_offset == (0.0, 0.0, 0.30)
+    native = get_embodiment("variant_bot.native")
+    assert native.full_name == "variant_bot.native" and native.camera_offset == (0.05, 0.0, 0.10)
+    assert get_embodiment("variant_bot.blind").sensors == ("lidar",)
+
+
+def test_canonical_name_pins_the_default_variant():
+    """Verify resolve_embodiment_name records the explicit variant, and leaves variantless robots alone."""
+    from nav_arena.embodiments import resolve_embodiment_name
+
+    _register_two_variant_robot()
+    assert resolve_embodiment_name("variant_bot") == "variant_bot.mast"
+    assert resolve_embodiment_name("variant_bot.native") == "variant_bot.native"
+    assert resolve_embodiment_name("dingo") == "dingo"
+
+
+@pytest.mark.parametrize("bad", ["variant_bot.nope", "dingo.mast", "missing_bot", "missing_bot.mast"])
+def test_unknown_robot_or_variant_is_a_key_error(bad):
+    """Verify unknown robots and variants fail with a KeyError naming what is available."""
+    _register_two_variant_robot()
+    with pytest.raises(KeyError):
+        get_embodiment(bad)
+
+
+def test_variant_registration_is_validated():
+    """Verify typos in override fields, missing defaults, duplicates and dotted names fail at registration."""
+    from nav_arena.embodiments import EmbodimentVariant
+
+    base = RobotEmbodimentCfg()
+    ok = EmbodimentVariant("a", "", {"camera_offset": (0.0, 0.0, 0.2)})
+    with pytest.raises(ValueError, match="unknown or reserved fields"):
+        register_embodiment("r", base, variants=[EmbodimentVariant("a", "", {"camera_ofset": (0, 0, 0)})], default_variant="a")
+    with pytest.raises(ValueError, match="unknown or reserved fields"):
+        register_embodiment("r", base, variants=[EmbodimentVariant("a", "", {"variant": "x"})], default_variant="a")
+    with pytest.raises(ValueError, match="default_variant"):
+        register_embodiment("r", base, variants=[ok])
+    with pytest.raises(ValueError, match="default_variant"):
+        register_embodiment("r", base, variants=[ok], default_variant="b")
+    with pytest.raises(ValueError, match="duplicate"):
+        register_embodiment("r", base, variants=[ok, ok], default_variant="a")
+    with pytest.raises(ValueError, match="contain no"):
+        register_embodiment("r", base, variants=[EmbodimentVariant("a.b")], default_variant="a.b")
+    with pytest.raises(ValueError, match="must not contain"):
+        register_embodiment("r.x", base, variants=[ok], default_variant="a")
+
+
+def test_reregistering_without_variants_keeps_them_but_empty_tuple_clears_them():
+    """Verify a module that registers itself on import cannot wipe the variants declared for its name."""
+    from nav_arena.embodiments import list_variants
+
+    _register_two_variant_robot()
+    register_embodiment("variant_bot", RobotEmbodimentCfg())  # variants=None keeps them
+    assert [v.name for v in list_variants("variant_bot")] == ["mast", "native", "blind"]
+    register_embodiment("variant_bot", RobotEmbodimentCfg(), variants=())
+    assert list_variants("variant_bot") == []
+    assert get_embodiment("variant_bot").variant == ""
+
+
+def test_lazy_registration_does_not_import_the_embodiment_until_needed():
+    """Verify built-in robots are lazy strings (CLI-safe) and resolve to the same cfg when requested."""
+    from nav_arena.embodiments import registry
+
+    clear_registry()
+    register_default_embodiments()
+    assert isinstance(registry._EMBODIMENT_REGISTRY["nova_carter"], str)
+    assert get_embodiment("nova_carter").wheel_radius == pytest.approx(0.14)
+
+
+def test_registered_drive_type_matches_the_embodiment():
+    """Verify the light drive_type recorded for the CLI listing agrees with each resolved embodiment."""
+    from nav_arena.embodiments import drive_type_of
+
+    for name in list_embodiments():
+        assert drive_type_of(name) == get_embodiment(name).drive_type
+
+
+def test_embodiments_package_and_registry_import_no_simulator_or_ml_modules():
+    """Verify robot names, variants and resolution load without torch, Isaac Lab or Omniverse (the CLI relies on it)."""
+    code = (
+        "import sys\n"
+        "from nav_arena.embodiments import list_embodiments, resolve_embodiment_name, list_variants\n"
+        "list_embodiments(); resolve_embodiment_name('dingo')\n"
+        "forbidden = {'isaacsim', 'isaaclab', 'omni', 'pxr', 'rclpy', 'torch'}\n"
+        "loaded = forbidden.intersection(m.split('.')[0] for m in sys.modules)\n"
+        "assert not loaded, loaded\n"
+    )
+    res = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert res.returncode == 0, res.stdout + res.stderr
+
+
+def test_unknown_sensor_names_are_rejected():
+    """Verify a typo in the sensors tuple fails at construction."""
+    with pytest.raises(ValueError, match="sensors"):
+        RobotEmbodimentCfg(sensors=("lidar", "cam"))

@@ -290,10 +290,13 @@ def create_interior_agent_scene_cfg(
         ),
     )
     # Sensors attach to the embodiment's USD body link (chassis_link for the Carter, base_link for the Dingo).
-    cfg.lidar = cfg.lidar.replace(
-        prim_path=f"{{ENV_REGEX_NS}}/Robot/{embodiment.body_link}",
-        offset=cfg.lidar.offset.replace(pos=tuple(embodiment.lidar_offset)),
-    )
+    if "lidar" in embodiment.sensors:
+        cfg.lidar = cfg.lidar.replace(
+            prim_path=f"{{ENV_REGEX_NS}}/Robot/{embodiment.body_link}",
+            offset=cfg.lidar.offset.replace(pos=tuple(embodiment.lidar_offset)),
+        )
+    else:
+        cfg.lidar = None
     if enable_camera:
         cfg.camera = create_embodiment_camera_cfg(embodiment)
     if enable_goal_camera:

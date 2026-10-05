@@ -176,7 +176,15 @@ def create_embodiment_camera_cfg(embodiment: RobotEmbodimentCfg, **kwargs) -> Ca
 
     Returns:
         Configured CameraCfg.
+
+    Raises:
+        ValueError: If the embodiment (variant) has no camera.
     """
+    if "camera" not in embodiment.sensors:
+        raise ValueError(
+            f"Embodiment '{embodiment.full_name}' has no camera (sensors: {embodiment.sensors}); "
+            "pick a variant with one or a method that does not need RGB-D"
+        )
     kwargs.setdefault("prim_path", f"{{ENV_REGEX_NS}}/Robot/{embodiment.body_link}/front_camera")
     kwargs.setdefault("mount_pos", tuple(embodiment.camera_offset))
     kwargs.setdefault("mount_rot", tuple(embodiment.camera_rot))

@@ -7,7 +7,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
@@ -29,6 +30,23 @@ def is_policy_driven(drive_type: str) -> bool:
     return drive_type in _POLICY_DRIVEN
 
 
+SENSORS = ("lidar", "camera")
+"""Sensors an embodiment can offer; the ``sensors`` field lists the ones a robot (or variant) actually has."""
+
+
+@dataclass(frozen=True)
+class EmbodimentVariant:
+    """A named, known configuration of an embodiment (for example a camera mount).
+
+    A variant is data only: ``overrides`` replaces fields of the base :class:`RobotEmbodimentCfg`. It is addressed
+    as ``<robot>.<variant>`` (``kaya.native``); the bare robot name selects the robot's default variant.
+    """
+
+    name: str
+    description: str = ""
+    overrides: Mapping[str, Any] = field(default_factory=dict)
+
+
 @dataclass
 class RobotEmbodimentCfg:
     """Base specification contract for mobile robot embodiments.
@@ -38,6 +56,8 @@ class RobotEmbodimentCfg:
     """
 
     name: str = ""
+    # Selected variant of the robot ("" for robots without variants). Set by get_embodiment.
+    variant: str = ""
     articulation_cfg: Any = None
     action_cfg: Any = None
     drive_type: str = "diff"
@@ -78,10 +98,20 @@ class RobotEmbodimentCfg:
     robot_radius: float = 0.30
     robot_height: float = 0.40
     stage_patch_fn: Callable[[Any], None] | None = None
+    # Sensors this robot (or variant) has. Requesting a missing one (camera for a learned baseline) is an error.
+    sensors: tuple[str, ...] = SENSORS
 
     def __post_init__(self) -> None:
         if self.drive_type not in DRIVE_TYPES:
             raise ValueError(f"Unknown drive_type '{self.drive_type}'. Expected one of: {DRIVE_TYPES}")
+        unknown = [s for s in self.sensors if s not in SENSORS]
+        if unknown:
+            raise ValueError(f"Unknown sensors {unknown}. Expected a subset of: {SENSORS}")
+
+    @property
+    def full_name(self) -> str:
+        """Canonical name: ``<robot>.<variant>``, or just the robot name when it has no variants."""
+        return f"{self.name}.{self.variant}" if self.variant else self.name
 
     @property
     def step_dt(self) -> float:

@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +21,7 @@ from nav_arena.benchmarks.sweep import (
     resolve_batch_for_resume,
     validate_sweep_spec,
 )
-from nav_arena.cli._common import CliError
+from nav_arena.cli._common import CliError, canonical_robot
 from nav_arena.utils.logger import get_logger
 
 logger = get_logger("nav_arena.cli")
@@ -130,6 +131,7 @@ def handle_sweep(args: argparse.Namespace) -> int:
             validate_sweep_spec(spec)
         except ValueError as exc:
             raise CliError(f"Sweep validation error: {exc}") from exc
+        spec = dataclasses.replace(spec, robots=[canonical_robot(robot) for robot in spec.robots])
     except CliError as exc:
         logger.error("%s", exc)
         return 1
@@ -151,7 +153,7 @@ def _add_sweep_subcommand_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--methods", "--method", type=str, default=None, dest="methods", help="Comma-separated list of methods (e.g. iplanner,navdp).")
     parser.add_argument("--routes", "--route", type=str, default=None, dest="routes", help="Comma-separated list of routes.")
     parser.add_argument("--seeds", "--seed", type=str, default=None, dest="seeds", help="Comma-separated list of integer seeds.")
-    parser.add_argument("--robots", "--robot", type=str, default=None, dest="robots", help="Comma-separated list of robots.")
+    parser.add_argument("--robots", "--robot", type=str, default=None, dest="robots", help="Comma-separated list of robots; <robot>.<variant> picks a variant (see 'nav_arena robots list').")
     parser.add_argument("--name", type=str, default=None, help="Override sweep name.")
     parser.add_argument("--timeout", type=float, default=None, help="Per-run execution timeout in seconds.")
     parser.add_argument("--resume", action="store_true", default=False, help="Resume an existing sweep batch.")

@@ -103,3 +103,12 @@ def test_sensor_suite_camera_disabled_by_default():
     assert suite.camera is None
     assert suite.enable_camera is False
     assert suite.lidar_2d is not None
+
+
+def test_camera_of_an_embodiment_without_one_is_an_error():
+    """Verify a variant that lacks the camera cannot silently get one, naming the variant in the message."""
+    from dataclasses import replace
+
+    blind = replace(get_embodiment("dingo"), sensors=("lidar",), variant="blind")
+    with pytest.raises(ValueError, match=r"dingo\.blind.*no camera"):
+        create_embodiment_camera_cfg(blind)
