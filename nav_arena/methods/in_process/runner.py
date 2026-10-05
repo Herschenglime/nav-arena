@@ -31,7 +31,7 @@ from nav_arena.utils import get_logger
 from nav_arena.utils.run_dir import recorded_artifacts
 
 from .base import InProcessPolicy, Plan, PolicyObservation
-from .controller import FollowerCfg, body_to_world, follow_path, goal_body_input, world_to_body
+from .controller import BODY_TWIST_DIM, FollowerCfg, body_to_world, follow_path, goal_body_input, world_to_body
 
 logger = get_logger("in_process_runner")
 
@@ -184,7 +184,9 @@ def run_episode(task: Any, policy: InProcessPolicy, cfg: EpisodeCfg | None = Non
     plan_period = max(1, round(1.0 / (policy.plan_hz * step_dt)))
 
     task.reset()
-    zero = torch.zeros((1, 2), device=task.device)
+    if task.action_dim != BODY_TWIST_DIM:
+        raise ValueError(f"Expected a body twist action of width {BODY_TWIST_DIM}, but the task takes {task.action_dim}")
+    zero = torch.zeros((1, task.action_dim), device=task.device)
     for _ in range(cfg.warmup_steps):
         task.step(zero)
 
@@ -306,10 +308,12 @@ def run_episode(task: Any, policy: InProcessPolicy, cfg: EpisodeCfg | None = Non
             recorder.snapshot(sim_time, rgb, depth, step)
 
         if stop:
-            v = w = 0.0
+            vx = vy = wz = 0.0
         else:
-            v, w = follow_path(world_to_body(path_world, np.array([x, y]), yaw), distance, cfg.follower)
-        _, _, terminated, truncated, _ = task.step(torch.tensor([[v, w]], dtype=torch.float32, device=task.device))
+            vx, wz = follow_path(world_to_body(path_world, np.array([x, y]), yaw), distance, cfg.follower)
+            vy = 0.0
+        command = torch.tensor([[vx, vy, wz]], dtype=torch.float32, device=task.device)
+        _, _, terminated, truncated, _ = task.step(command)
         steps += 1
         sim_time += step_dt
         if bool(terminated.any()) or bool(truncated.any()):

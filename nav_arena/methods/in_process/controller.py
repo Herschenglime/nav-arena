@@ -16,6 +16,9 @@ import math
 
 import numpy as np
 
+BODY_TWIST_DIM = 3
+"""Width of the command every embodiment accepts: the body-frame twist ``[vx, vy, wz]``."""
+
 
 def world_to_body(points: np.ndarray, position: np.ndarray, yaw: float) -> np.ndarray:
     """Express world-frame planar points in the body frame of a robot at ``position`` with heading ``yaw``.

@@ -364,6 +364,11 @@ class PointNavTask(ManagerBasedRLEnv):
             cfg = PointNavEnvCfg()
         super().__init__(cfg=cfg, render_mode=render_mode, **kwargs)
 
+    @property
+    def action_dim(self) -> int:
+        """Width of the command tensor accepted by :meth:`step` (the body twist ``[vx, vy, wz]``)."""
+        return int(self.action_manager.total_action_dim)
+
     def get_goal_pose_w(self, env_idx: int = 0) -> tuple[float, float, float]:
         """Get the current target 2D pose in world frame.
 

@@ -141,7 +141,7 @@ def run_verification():
 
     # Step 2: Drive towards the goal and verify distance decrease and goal termination
     logger.info("Driving forward towards the goal (+X)...")
-    forward_action = torch.tensor([[0.6, 0.0]], device=task.device)
+    forward_action = torch.tensor([[0.6, 0.0, 0.0]], device=task.device)
 
     goal_reached_detected = False
     step_count = 0
@@ -182,7 +182,7 @@ def run_verification():
 
     # Step 4: Verify Contact / Collision Metric by driving backward into the wall
     logger.info("Testing collision detection by driving backward towards wall (-X)...")
-    reverse_action = torch.tensor([[-0.8, 0.0]], device=task.device)
+    reverse_action = torch.tensor([[-0.8, 0.0, 0.0]], device=task.device)
     collision_detected = False
 
     for c_step in range(200):

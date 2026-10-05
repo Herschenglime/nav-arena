@@ -7,7 +7,7 @@ Update this file in the same commit as the work it describes, so it always match
 - **Rules:** commit locally, never push (the user pushes). Headless sims via `./agy_python.sh` are OK; GUI checks
   and the Nav2 regression are the user's. Install packages only into `env_isaaclab` with `uv pip --no-deps`.
 - **Last updated:** 2026-10-04
-- **Next action:** Phase 0 step 1 (3-wide body-twist command)
+- **Next action:** Phase 0 step 2 (`drive_type`, `max_lateral_speed` on `RobotEmbodimentCfg`)
 
 ## Phase 0: drive-agnostic base (diff-drive results must not change)
 
@@ -17,11 +17,11 @@ Update this file in the same commit as the work it describes, so it always match
   - [x] `verify_embodiment --camera` for nova_carter (camera check fails, pre-existing) and dingo
   - [x] `verify_task --camera` for both
   - [x] `verify_baseline --method iplanner --route hall_straight` for both
-- [ ] 1. Body-twist `[vx, vy, wz]` command everywhere
-  - [ ] `DifferentialDriveAction`: `action_dim = 3`, 3-tuple scale/offset, `vy` ignored
-  - [ ] `runner.py`: warm-up and step actions width 3, width read from the task
-  - [ ] `ros2/adapters/action_adapter.py`: `TwistActionAdapter` fills `linear.x, linear.y, angular.z`
-  - [ ] `verify_embodiment.py`, `run_ros2_nav.py`, `verify_nav2.py`: action shapes
+- [x] 1. Body-twist `[vx, vy, wz]` command everywhere (committed; dingo verify_embodiment/verify_task match baseline)
+  - [x] `DifferentialDriveAction`: `action_dim = 3`, 3-tuple scale/offset, `vy` ignored
+  - [x] `runner.py`: warm-up and step actions width 3, width read from `PointNavTask.action_dim`
+  - [x] `ros2/adapters/action_adapter.py`: `TwistActionAdapter` fills `linear.x, linear.y, angular.z`
+  - [x] `verify_embodiment.py`, `verify_task.py`: action shapes (`run_ros2_nav.py`/`verify_nav2.py` pass the adapter's tensor straight through, no change)
 - [ ] 2. `RobotEmbodimentCfg`: `drive_type` (`diff | holonomic | quadruped`), `max_lateral_speed`, `is_policy_driven()`
 - [ ] 3. Embodiment-owned `sim_dt`, `decimation`, `spawn_height`; camera render interval as a rate
 - [ ] 4. `contact_bodies` separate from `body_link`

@@ -24,6 +24,7 @@ class FakeTask:
 
     step_dt = 0.02
     device = "cpu"
+    action_dim = 3
 
     def __init__(self, goal=(3.0, 0.0), threshold=0.4, depth_valid=True, forced_cause=None, truncate_after=None):
         self.start = np.array([0.0, 0.0, 0.0])
@@ -50,7 +51,8 @@ class FakeTask:
         self.steps_taken = 0
 
     def step(self, action):
-        v, w = (float(a) for a in action[0])
+        v, vy, w = (float(a) for a in action[0])
+        assert vy == 0.0
         self.actions.append((v, w))
         if v == 0.0 and w == 0.0:
             self.zero_steps += 1
@@ -377,3 +379,11 @@ def test_clear_recorded_artifacts_keeps_unrelated_files(tmp_path):
     assert len(recorded_artifacts(tmp_path)) == 5
     assert clear_recorded_artifacts(tmp_path) == 5
     assert sorted(p.name for p in tmp_path.iterdir()) == ["run_spec.json", "worker.log"]
+
+
+def test_rejects_a_task_that_does_not_take_a_body_twist():
+    """Verify the runner refuses a task whose action is not the 3-wide body twist [vx, vy, wz]."""
+    task = FakeTask()
+    task.action_dim = 2
+    with pytest.raises(ValueError, match="body twist"):
+        run_episode(task, GoalSeeker(), _cfg())

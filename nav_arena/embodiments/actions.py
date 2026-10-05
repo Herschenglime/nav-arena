@@ -24,7 +24,11 @@ if TYPE_CHECKING:
 
 
 class DifferentialDriveAction(ActionTerm):
-    """Action term that converts linear/angular velocity commands into differential wheel velocities."""
+    """Action term that converts a body twist command into differential wheel velocities.
+
+    The command is the framework-wide body twist ``[vx, vy, wz]``. A differential drive cannot move sideways, so
+    ``vy`` is accepted (keeping the command width identical across drive types) and ignored.
+    """
 
     cfg: DifferentialDriveActionCfg
     _asset: Articulation
@@ -64,7 +68,7 @@ class DifferentialDriveAction(ActionTerm):
 
     @property
     def action_dim(self) -> int:
-        return 2
+        return 3
 
     @property
     def raw_actions(self) -> torch.Tensor:
@@ -82,13 +86,14 @@ class DifferentialDriveAction(ActionTerm):
         self._processed_actions[:, 0] = torch.clamp(
             self._processed_actions[:, 0], -self.cfg.max_linear_speed, self.cfg.max_linear_speed
         )
-        self._processed_actions[:, 1] = torch.clamp(
-            self._processed_actions[:, 1], -self.cfg.max_angular_speed, self.cfg.max_angular_speed
+        self._processed_actions[:, 1] = 0.0  # a differential drive has no lateral velocity
+        self._processed_actions[:, 2] = torch.clamp(
+            self._processed_actions[:, 2], -self.cfg.max_angular_speed, self.cfg.max_angular_speed
         )
 
     def apply_actions(self):
         v = self._processed_actions[:, 0]
-        omega = self._processed_actions[:, 1]
+        omega = self._processed_actions[:, 2]
 
         v_left, v_right = diff_drive_ik(
             v=v,
@@ -120,8 +125,8 @@ class DifferentialDriveAction(ActionTerm):
 class DifferentialDriveActionCfg(ActionTermCfg):
     """Configuration for a differential drive action term.
 
-    Maps a 2D action ``[v, omega]`` (forward linear velocity in m/s and angular
-    yaw rate in rad/s) into target angular velocities for the left and right wheels:
+    Maps a body twist action ``[vx, vy, omega]`` (forward velocity in m/s, lateral velocity in m/s, and yaw rate in
+    rad/s) into target angular velocities for the left and right wheels. ``vy`` is ignored. With :math:`v = v_x`:
 
     .. math::
         \\dot{q}_{\\text{left}} = \\frac{v - \\omega \\cdot L / 2}{R}
@@ -147,11 +152,11 @@ class DifferentialDriveActionCfg(ActionTermCfg):
     wheel_base: float = 0.413
     """Distance between left and right wheels in meters. Defaults to 0.413 m (Nova Carter)."""
 
-    scale: tuple[float, float] = (1.0, 1.0)
-    """Scaling factor applied to raw actions [v_scale, omega_scale]."""
+    scale: tuple[float, float, float] = (1.0, 1.0, 1.0)
+    """Scaling factor applied to raw actions [vx_scale, vy_scale, omega_scale]."""
 
-    offset: tuple[float, float] = (0.0, 0.0)
-    """Offset added to raw actions [v_offset, omega_offset]."""
+    offset: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    """Offset added to raw actions [vx_offset, vy_offset, omega_offset]."""
 
     max_linear_speed: float = 2.0
     """Maximum linear velocity clip (m/s)."""

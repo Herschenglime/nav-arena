@@ -177,13 +177,13 @@ def run_verification(simulation_app):
             # Alternate maneuvers: Forward, Spin Left, Reverse, Spin Right
             phase = (step // 150) % 4
             if phase == 0:
-                cmd = [0.6, 0.0]
+                cmd = [0.6, 0.0, 0.0]
             elif phase == 1:
-                cmd = [0.0, 1.0]
+                cmd = [0.0, 0.0, 1.0]
             elif phase == 2:
-                cmd = [-0.4, 0.0]
+                cmd = [-0.4, 0.0, 0.0]
             else:
-                cmd = [0.0, -1.0]
+                cmd = [0.0, 0.0, -1.0]
 
             action = torch.tensor([cmd], device=sim.device)
             action_manager.process_action(action)
@@ -198,10 +198,10 @@ def run_verification(simulation_app):
         return
 
     # Standard non-loop test run
-    # Test driving forward with linear vel = 0.5 m/s, angular vel = 0.0 rad/s
-    action = torch.tensor([[0.5, 0.0]], device=sim.device)
+    # Test driving forward with body twist [vx=0.5 m/s, vy=0.0 m/s, wz=0.0 rad/s]
+    action = torch.tensor([[0.5, 0.0, 0.0]], device=sim.device)
 
-    logger.info("Stepping simulation with action [v=0.5 m/s, w=0.0 rad/s] for 60 steps...")
+    logger.info("Stepping simulation with twist [vx=0.5 m/s, vy=0.0 m/s, wz=0.0 rad/s] for 60 steps...")
     for step in range(60):
         # Process and apply action through ActionManager
         action_manager.process_action(action)

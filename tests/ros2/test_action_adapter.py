@@ -14,7 +14,7 @@ def test_twist_action_adapter():
         # Verify initial action is zero
         initial_action = adapter.get_action()
         assert torch.all(initial_action == 0.0)
-        assert initial_action.shape == (2, 2)
+        assert initial_action.shape == (2, 3)
         
         # Create a mock publisher
         node = rclpy.create_node('mock_publisher')
@@ -23,6 +23,7 @@ def test_twist_action_adapter():
         # Publish a command
         msg = Twist()
         msg.linear.x = 1.5
+        msg.linear.y = 0.25
         msg.angular.z = -0.5
         pub.publish(msg)
         
@@ -34,7 +35,7 @@ def test_twist_action_adapter():
             rclpy.spin_once(node, timeout_sec=0.1)
             rclpy.spin_once(adapter, timeout_sec=0.1)
             action = adapter.get_action()
-            if action[0, 0].item() == 1.5 and action[0, 1].item() == -0.5:
+            if action[0, 0].item() == 1.5 and action[0, 1].item() == 0.25 and action[0, 2].item() == -0.5:
                 msg_received = True
                 break
                 
@@ -42,7 +43,8 @@ def test_twist_action_adapter():
         
         # Verify both environments get the same command (since it's broadcasted)
         assert action[1, 0].item() == 1.5
-        assert action[1, 1].item() == -0.5
+        assert action[1, 1].item() == 0.25
+        assert action[1, 2].item() == -0.5
         
     finally:
         node.destroy_node()
