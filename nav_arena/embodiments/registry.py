@@ -232,8 +232,12 @@ def clear_registry() -> None:
 
 
 def register_default_embodiments() -> None:
-    """Register built-in framework embodiments ('nova_carter', 'dingo', 'kaya') lazily, without importing them."""
-    from .base import EmbodimentVariant
+    """Register built-in framework embodiments ('nova_carter', 'dingo', 'kaya') lazily, without importing them.
+
+    Variants are registered here with their full data (from light, data-only modules), so a registry reset can never
+    leave a variant without its overrides.
+    """
+    from .kaya_variants import KAYA_DEFAULT_VARIANT, KAYA_VARIANTS
 
     register_embodiment(
         "nova_carter", "nav_arena.embodiments.nova_carter:NovaCarterEmbodimentCfg", variants=(), drive_type="diff"
@@ -242,19 +246,9 @@ def register_default_embodiments() -> None:
     register_embodiment(
         "kaya",
         "nav_arena.embodiments.kaya:KayaEmbodimentCfg",
-        variants=[
-            EmbodimentVariant(
-                name="mast",
-                description="Virtual camera mast at 0.30 m (same viewpoint as Nova Carter / Dingo).",
-            ),
-            EmbodimentVariant(
-                name="native",
-                description="Native RealSense D435 pose from the Kaya USD: ~0.16 m high, pitched 20° down.",
-            ),
-        ],
-        default_variant="mast",
+        variants=KAYA_VARIANTS,
+        default_variant=KAYA_DEFAULT_VARIANT,
         drive_type="holonomic",
     )
-
 
 register_default_embodiments()

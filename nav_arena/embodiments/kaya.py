@@ -27,7 +27,6 @@ Two variants are registered:
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field
 
 import isaaclab.sim as sim_utils
@@ -36,7 +35,8 @@ from isaaclab.assets.articulation import ArticulationCfg
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
 from .actions import HolonomicDriveActionCfg
-from .base import EmbodimentVariant, RobotEmbodimentCfg
+from .base import RobotEmbodimentCfg
+from .kaya_variants import KAYA_MAST, KAYA_NATIVE, MAST_CAMERA_OFFSET, ROT_LEVEL  # noqa: F401 (re-exported)
 from .registry import register_embodiment
 
 ##
@@ -97,19 +97,6 @@ KAYA_ACTION_CFG = HolonomicDriveActionCfg(
 
 
 ##
-# Camera rotation quaternions  (x, y, z, w) — Isaac Lab convention
-##
-
-# Level camera facing +x: identity.
-_ROT_LEVEL = (0.0, 0.0, 0.0, 1.0)
-
-# Pitched 20 degrees down in the world convention (+X forward, +Y left, +Z up):
-# Positive rotation around +Y pitches the optical axis down toward the ground.
-#   qx=0, qy=sin(+10°), qz=0, qw=cos(10°)
-_ROT_PITCHED_DOWN_20 = (0.0, math.sin(math.radians(10.0)), 0.0, math.cos(math.radians(10.0)))
-
-
-##
 # Embodiment Container
 ##
 
@@ -150,14 +137,14 @@ class KayaEmbodimentCfg(RobotEmbodimentCfg):
     lidar_frame: str = "lidar_link"
     camera_frame: str = "camera_link"
 
-    # LiDAR mounts at the same height as the camera mast variant for consistent scan coverage.
-    sensor_height: float = 0.30
-    lidar_offset: tuple[float, float, float] = (0.0, 0.0, 0.30)
+    # LiDAR at the mast height, 0.30 m above the floor (offsets are relative to base_link, 0.091 m up).
+    sensor_height: float = MAST_CAMERA_OFFSET[2]
+    lidar_offset: tuple[float, float, float] = MAST_CAMERA_OFFSET
 
     # kaya.mast (default): virtual camera at 0.30 m above the floor.
     # base_link is 0.091 m above the floor, so the offset is 0.30 - 0.091 = 0.209 m.
-    camera_offset: tuple[float, float, float] = (0.0, 0.0, 0.209)
-    camera_rot: tuple[float, float, float, float] = _ROT_LEVEL
+    camera_offset: tuple[float, float, float] = MAST_CAMERA_OFFSET
+    camera_rot: tuple[float, float, float, float] = ROT_LEVEL
 
     # Footprint polygon (x, y) relative to base_link. Kaya's visual bounding box is ~0.27 × 0.29 m;
     # the omni-wheel arrangement is roughly circular with radius ~0.15 m.
@@ -173,37 +160,6 @@ class KayaEmbodimentCfg(RobotEmbodimentCfg):
     robot_height: float = 0.24
 
 
-##
-# Variant definitions
-##
-
-#: ``kaya.mast``: virtual camera mast at 0.30 m above the floor (same as Nova Carter / Dingo).
-#: This is the default variant so ``--robot kaya`` selects it.
-KAYA_MAST = EmbodimentVariant(
-    name="mast",
-    description="Virtual camera mast at 0.30 m (same viewpoint as Nova Carter / Dingo).",
-    overrides={
-        "camera_offset": (0.0, 0.0, 0.209),
-        "camera_rot": _ROT_LEVEL,
-    },
-)
-
-#: ``kaya.native``: the real RealSense D435 as-mounted in the USD (~0.16 m high, −20° pitch).
-#: Lens centre is approximately (0.06, 0, 0.07) above base_link.
-KAYA_NATIVE = EmbodimentVariant(
-    name="native",
-    description="Native RealSense D435 pose from the Kaya USD: ~0.16 m high, pitched 20° down.",
-    overrides={
-        "camera_offset": (0.06, 0.0, 0.07),
-        "camera_rot": _ROT_PITCHED_DOWN_20,
-    },
-)
-
-
-register_embodiment(
-    "kaya",
-    KayaEmbodimentCfg,
-    variants=[KAYA_MAST, KAYA_NATIVE],
-    default_variant="mast",
-    drive_type="holonomic",
-)
+# Kaya registers itself only to keep the module importable on its own; the variants (and their data) are registered
+# by registry.register_default_embodiments from kaya_variants. variants=None keeps them.
+register_embodiment("kaya", KayaEmbodimentCfg, drive_type="holonomic")

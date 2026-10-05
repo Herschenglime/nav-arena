@@ -412,3 +412,25 @@ def test_unknown_sensor_names_are_rejected():
     """Verify a typo in the sensors tuple fails at construction."""
     with pytest.raises(ValueError, match="sensors"):
         RobotEmbodimentCfg(sensors=("lidar", "cam"))
+
+
+def test_kaya_variants_keep_their_data_across_a_registry_reset():
+    """Verify kaya.native keeps its camera after clear_registry + register_default_embodiments (a past bug)."""
+    from nav_arena.embodiments.kaya_variants import MAST_CAMERA_OFFSET, NATIVE_CAMERA_OFFSET
+
+    for _ in range(2):
+        assert get_embodiment("kaya.native").camera_offset == NATIVE_CAMERA_OFFSET
+        assert get_embodiment("kaya").camera_offset == MAST_CAMERA_OFFSET
+        assert get_embodiment("kaya").full_name == "kaya.mast"
+        clear_registry()
+        register_default_embodiments()
+
+
+def test_kaya_lidar_and_mast_camera_sit_0_30_m_above_the_floor():
+    """Verify Kaya's LiDAR and mast camera share the 0.30 m mount height (offsets are from base_link, 0.091 m up)."""
+    from nav_arena.embodiments.kaya_variants import BASE_LINK_HEIGHT
+
+    kaya = get_embodiment("kaya")
+    assert kaya.lidar_offset[2] + BASE_LINK_HEIGHT == pytest.approx(0.30)
+    assert kaya.camera_offset[2] + BASE_LINK_HEIGHT == pytest.approx(0.30)
+    assert kaya.sensor_height == kaya.lidar_offset[2]
