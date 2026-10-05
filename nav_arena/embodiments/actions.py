@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import MISSING
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import torch
 
@@ -17,7 +17,8 @@ from isaaclab.assets.articulation import Articulation
 from isaaclab.managers.action_manager import ActionTerm, ActionTermCfg
 from isaaclab.utils.configclass import configclass
 
-from nav_arena.embodiments.kinematics import diff_drive_ik
+from nav_arena.embodiments.kinematics import diff_drive_ik, holonomic_ik
+from nav_arena.embodiments.wheel_geometry import read_wheel_geometry
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv
@@ -163,3 +164,110 @@ class DifferentialDriveActionCfg(ActionTermCfg):
 
     max_angular_speed: float = 3.0
     """Maximum angular velocity clip (rad/s)."""
+
+
+class HolonomicDriveAction(ActionTerm):
+    """Action term that converts a body twist command into omni or mecanum wheel velocities.
+
+    The command is the body twist ``[vx, vy, wz]`` at the chassis frame the wheel joints attach to. The wheel layout is
+    read from the robot's USD (``isaacmecanumwheel:*`` attributes and joint frames) unless given in the config, and
+    turned into a twist-to-wheel matrix once at construction. Passive roller joints are left alone.
+    """
+
+    cfg: HolonomicDriveActionCfg
+    _asset: Articulation
+
+    def __init__(self, cfg: HolonomicDriveActionCfg, env: ManagerBasedEnv):
+        super().__init__(cfg, env)
+
+        names = list(self.cfg.wheel_joint_names)
+        joint_ids, joint_names = self._asset.find_joints(names, preserve_order=True)
+        if len(joint_ids) != len(names):
+            raise ValueError(f"Expected {len(names)} wheel joints matching {names}, got {len(joint_ids)}: {joint_names}")
+        self._wheel_joint_ids = list(joint_ids)
+
+        geometry = self.cfg.wheel_geometry
+        if geometry is None:
+            import isaaclab.sim as sim_utils
+
+            root = sim_utils.find_first_matching_prim(self._asset.cfg.prim_path)
+            if root is None:
+                raise ValueError(f"Could not find the robot prim for '{self._asset.cfg.prim_path}' to read the wheel layout")
+            geometry = read_wheel_geometry(sim_utils.get_current_stage(), root.GetPath().pathString, joint_names)
+        self._matrix = geometry.matrix().to(self.device)
+
+        self._raw_actions = torch.zeros(self.num_envs, self.action_dim, device=self.device)
+        self._processed_actions = torch.zeros_like(self._raw_actions)
+        self._wheel_vel_targets = torch.zeros(self.num_envs, len(names), device=self.device)
+        self._scale = torch.tensor(self.cfg.scale, device=self.device).unsqueeze(0)
+        self._offset = torch.tensor(self.cfg.offset, device=self.device).unsqueeze(0)
+        self._limits = torch.tensor(
+            [self.cfg.max_linear_speed, self.cfg.max_lateral_speed, self.cfg.max_angular_speed], device=self.device
+        ).unsqueeze(0)
+
+    @property
+    def action_dim(self) -> int:
+        return 3
+
+    @property
+    def raw_actions(self) -> torch.Tensor:
+        return self._raw_actions
+
+    @property
+    def processed_actions(self) -> torch.Tensor:
+        return self._processed_actions
+
+    @property
+    def wheel_matrix(self) -> torch.Tensor:
+        """The ``[N, 3]`` twist-to-wheel-velocity matrix in use."""
+        return self._matrix
+
+    def process_actions(self, actions: torch.Tensor):
+        self._raw_actions[:] = actions
+        self._processed_actions = torch.clamp(self._raw_actions * self._scale + self._offset, -self._limits, self._limits)
+
+    def apply_actions(self):
+        self._wheel_vel_targets[:] = holonomic_ik(self._processed_actions, self._matrix)
+        self._asset.set_joint_velocity_target_index(target=self._wheel_vel_targets, joint_ids=self._wheel_joint_ids)
+
+    def reset(self, env_ids: Sequence[int] | None = None) -> None:
+        if env_ids is None:
+            env_ids = slice(None)
+        self._raw_actions[env_ids] = 0.0
+        self._processed_actions[env_ids] = 0.0
+        self._wheel_vel_targets[env_ids] = 0.0
+
+
+@configclass
+class HolonomicDriveActionCfg(ActionTermCfg):
+    """Configuration for an omni or mecanum drive action term.
+
+    Maps a body twist action ``[vx, vy, omega]`` (m/s, m/s, rad/s) into target angular velocities for the wheel joints
+    using the layout of the wheels (see :func:`nav_arena.embodiments.kinematics.holonomic_matrix`).
+    """
+
+    class_type: type[HolonomicDriveAction] = HolonomicDriveAction
+
+    asset_name: str = "robot"
+    """Name of the articulation asset in the scene."""
+
+    wheel_joint_names: tuple[str, ...] = MISSING
+    """Exact names of the driven wheel joints. The roller joints of omni/mecanum wheels are not listed."""
+
+    wheel_geometry: Any = None
+    """A :class:`WheelGeometry`, or None to read the layout from the robot's USD."""
+
+    scale: tuple[float, float, float] = (1.0, 1.0, 1.0)
+    """Scaling factor applied to raw actions [vx_scale, vy_scale, omega_scale]."""
+
+    offset: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    """Offset added to raw actions [vx_offset, vy_offset, omega_offset]."""
+
+    max_linear_speed: float = 1.0
+    """Maximum forward velocity clip (m/s)."""
+
+    max_lateral_speed: float = 1.0
+    """Maximum sideways velocity clip (m/s)."""
+
+    max_angular_speed: float = 3.0
+    """Maximum yaw rate clip (rad/s)."""
