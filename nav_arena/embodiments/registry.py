@@ -232,7 +232,7 @@ def clear_registry() -> None:
 
 
 def register_default_embodiments() -> None:
-    """Register built-in framework embodiments ('nova_carter', 'dingo', 'kaya') lazily, without importing them.
+    """Register built-in framework embodiments ('nova_carter', 'dingo', 'kaya', 'go2') lazily, without importing them.
 
     Variants are registered here with their full data (from light, data-only modules), so a registry reset can never
     leave a variant without its overrides.
@@ -250,5 +250,6 @@ def register_default_embodiments() -> None:
         default_variant=KAYA_DEFAULT_VARIANT,
         drive_type="holonomic",
     )
+    register_embodiment("go2", "nav_arena.embodiments.go2:Go2EmbodimentCfg", variants=(), drive_type="quadruped")
 
 register_default_embodiments()

@@ -434,3 +434,60 @@ def test_kaya_lidar_and_mast_camera_sit_0_30_m_above_the_floor():
     assert kaya.lidar_offset[2] + BASE_LINK_HEIGHT == pytest.approx(0.30)
     assert kaya.camera_offset[2] + BASE_LINK_HEIGHT == pytest.approx(0.30)
     assert kaya.sensor_height == kaya.lidar_offset[2]
+
+
+def test_go2_uses_the_policy_training_timing_and_is_a_quadruped():
+    """Verify Go2 runs physics at the policy's training dt with a 50 Hz command and stands up from 0.4 m."""
+    go2 = get_embodiment("go2")
+    assert go2.drive_type == "quadruped"
+    assert (go2.sim_dt, go2.decimation) == (0.005, 4)
+    assert go2.step_dt == pytest.approx(0.02)
+    assert go2.spawn_height == pytest.approx(0.4)
+    assert go2.max_linear_speed <= 1.0 and go2.max_lateral_speed <= 1.0 and go2.max_angular_speed <= 1.0
+
+
+def test_go2_action_is_the_pretrained_policy_with_its_training_observations():
+    """Verify the action term is Isaac Lab's PreTrainedPolicyAction fed by the pinned policy and noise-free observations."""
+    from nav_arena.embodiments.policies import GO2_FLAT_POLICY, _sha256
+
+    action = get_embodiment("go2").action_cfg
+    assert type(action).__name__ == "PreTrainedPolicyActionCfg"
+    assert action.debug_vis is False  # its arrows would be visible to the depth camera
+    assert action.low_level_decimation == 4
+    assert _sha256(Path(action.policy_path)) == GO2_FLAT_POLICY.sha256
+    obs = action.low_level_observations
+    assert obs.enable_corruption is False
+    assert obs.height_scan is None
+    assert action.low_level_actions.scale == pytest.approx(0.25) and action.low_level_actions.use_default_offset
+
+
+def test_go2_senses_collisions_on_body_and_legs_but_not_feet_and_keeps_the_scan_level():
+    """Verify the contact regex leaves the feet out and the LiDAR is yaw-aligned."""
+    import re
+
+    go2 = get_embodiment("go2")
+    pattern = re.compile(f"^{go2.contact_body_expr}$")
+    for body in ("base", "FL_hip", "RR_thigh", "FR_calf"):
+        assert pattern.match(body), body
+    assert not pattern.match("FL_foot")
+    assert go2.lidar_ray_alignment == "yaw"
+
+
+def test_go2_robot_and_timing_come_from_the_resolved_training_env():
+    """Verify the robot config (armature preset resolved) and dt are the training env's, not a hand-made copy."""
+    from nav_arena.embodiments.go2 import training_env_cfg
+
+    training = training_env_cfg()
+    go2 = get_embodiment("go2")
+    assert go2.sim_dt == training.sim.dt
+    assert go2.decimation == training.decimation
+    legs = go2.articulation_cfg.actuators["base_legs"]
+    assert legs.armature == 0.0
+    assert (legs.stiffness, legs.damping, legs.effort_limit) == (25.0, 0.5, 23.5)
+    assert go2.articulation_cfg.init_state.joint_pos == training.scene.robot.init_state.joint_pos
+
+
+def test_go2_action_cfgs_do_not_share_mutable_observation_configs():
+    """Verify each Go2 instance gets its own observation config (PreTrainedPolicyAction rewrites it in place)."""
+    first, second = get_embodiment("go2").action_cfg, get_embodiment("go2").action_cfg
+    assert first.low_level_observations is not second.low_level_observations

@@ -22,6 +22,7 @@ def create_2d_lidar_cfg(
     prim_path: str = "{ENV_REGEX_NS}/Robot/chassis_link",
     mesh_prim_paths: list[str | MultiMeshRayCasterCfg.RaycastTargetCfg] | None = None,
     mount_pos: tuple[float, float, float] = (0.0, 0.0, 0.35),
+    ray_alignment: str = "base",
     horizontal_fov_deg: float = 360.0,
     horizontal_res_deg: float = 1.0,
     max_range: float = 25.0,
@@ -34,6 +35,7 @@ def create_2d_lidar_cfg(
         prim_path: USD path where sensor frame is spawned.
         mesh_prim_paths: Mesh prim paths to cast rays against.
         mount_pos: (x, y, z) offset relative to parent link frame in meters.
+        ray_alignment: "base" to tilt the scan with the body, "yaw" to keep it level.
         horizontal_fov_deg: Total horizontal field of view in degrees.
         horizontal_res_deg: Angular resolution per ray beam in degrees.
         max_range: Maximum ray distance.
@@ -64,7 +66,7 @@ def create_2d_lidar_cfg(
             prim_path=prim_path,
             mesh_prim_paths=mesh_prim_paths,
             offset=MultiMeshRayCasterCfg.OffsetCfg(pos=mount_pos),
-            ray_alignment="base",
+            ray_alignment=ray_alignment,
             pattern_cfg=pattern_cfg,
             max_distance=max_range,
             update_period=update_period,
@@ -78,7 +80,7 @@ def create_2d_lidar_cfg(
         prim_path=prim_path,
         mesh_prim_paths=mesh_prim_paths,
         offset=RayCasterCfg.OffsetCfg(pos=mount_pos),
-        ray_alignment="base",
+        ray_alignment=ray_alignment,
         pattern_cfg=pattern_cfg,
         max_distance=max_range,
         update_period=update_period,

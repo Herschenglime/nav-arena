@@ -383,6 +383,21 @@ class PointNavTask(ManagerBasedRLEnv):
             cfg = PointNavEnvCfg()
         super().__init__(cfg=cfg, render_mode=render_mode, **kwargs)
 
+    def step(self, action: torch.Tensor):
+        """Step the environment under ``torch.inference_mode``, as Isaac Lab's own play scripts do.
+
+        Action terms that run a network (``PreTrainedPolicyAction`` for legged robots) would otherwise hand tensors that
+        track gradients to the physics backend, which rejects them.
+        """
+        with torch.inference_mode():
+            return super().step(action)
+
+    def reset(self, *args, **kwargs):
+        """Reset under ``torch.inference_mode`` too: buffers created during an inference-mode step can only be updated
+        in place inside it, so stepping and resetting must use the same mode."""
+        with torch.inference_mode():
+            return super().reset(*args, **kwargs)
+
     @property
     def action_dim(self) -> int:
         """Width of the command tensor accepted by :meth:`step` (the body twist ``[vx, vy, wz]``)."""

@@ -179,6 +179,7 @@ def run_verification(simulation_app):
             prim_path=f"{{ENV_REGEX_NS}}/Robot/{embodiment.body_link}",
             mesh_prim_paths=["/World/defaultGroundPlane"],
             mount_pos=embodiment.lidar_offset,
+            ray_alignment=embodiment.lidar_ray_alignment,
         )
 
         # Optional RGB-D camera (None entries are skipped by InteractiveScene)
@@ -193,7 +194,7 @@ def run_verification(simulation_app):
 
     logger.section(f"VERIFYING {embodiment.name.upper()} EMBODIMENT & SENSORS")
     logger.info("Creating SimulationContext...")
-    sim_cfg = sim_utils.SimulationCfg(dt=0.01)
+    sim_cfg = sim_utils.SimulationCfg(dt=embodiment.sim_dt)
     sim = sim_utils.SimulationContext(sim_cfg)
 
     logger.info("Setting up verification scene...")
@@ -256,6 +257,7 @@ def run_verification(simulation_app):
         return
 
     # Drive checks (per axis, driven by the embodiment's limits). The pass/fail rules live in nav_arena.utils.drive_check.
+    from nav_arena.embodiments.base import is_policy_driven
     from nav_arena.utils.drive_check import (
         evaluate_hold,
         evaluate_segment,
@@ -266,6 +268,7 @@ def run_verification(simulation_app):
 
     dt = sim.get_physics_dt()
 
+    @torch.inference_mode()  # as Isaac Lab's play scripts do; a policy-driven action term needs it
     def run(command, seconds):
         action_t = torch.tensor([command], device=sim.device)
         for _ in range(max(1, round(seconds / dt))):
@@ -295,6 +298,19 @@ def run_verification(simulation_app):
     passed, detail = evaluate_hold(segment([0.0, 0.0, 0.0], warmup_s=0.0, brake_s=0.0))
     logger.check("Zero-command hold", passed, detail)
     assert passed, f"Robot moved without a command: {detail}"
+
+    if is_policy_driven(embodiment.drive_type):
+        # A locomotion policy can wander or tip over slowly while "standing": hold 10 s, stay put and stay up.
+        stand_height = float(robot.data.root_pos_w[0][2])
+        passed, detail = evaluate_hold(
+            segment([0.0, 0.0, 0.0], warmup_s=0.0, measure_s=10.0, brake_s=0.0), max_translation=0.1, max_yaw=0.1
+        )
+        height = float(robot.data.root_pos_w[0][2])
+        upright = height > 0.8 * stand_height
+        passed = passed and upright
+        detail += f", base height {stand_height:.3f} -> {height:.3f} m"
+        logger.check("Stands for 10 s under a zero command", passed, detail)
+        assert passed, f"Legged robot did not stand still: {detail}"
 
     drive_name = type(action_manager._terms["robot_action"]).__name__
     commands = [("Forward drive (vx)", [min(0.3, embodiment.max_linear_speed), 0.0, 0.0])]

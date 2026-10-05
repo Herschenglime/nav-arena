@@ -294,6 +294,7 @@ def create_interior_agent_scene_cfg(
         cfg.lidar = cfg.lidar.replace(
             prim_path=f"{{ENV_REGEX_NS}}/Robot/{embodiment.body_link}",
             offset=cfg.lidar.offset.replace(pos=tuple(embodiment.lidar_offset)),
+            ray_alignment=embodiment.lidar_ray_alignment,
         )
     else:
         cfg.lidar = None

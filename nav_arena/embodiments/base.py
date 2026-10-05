@@ -87,6 +87,9 @@ class RobotEmbodimentCfg:
     # Legged robots list the base and legs but not the feet.
     contact_bodies: str | None = None
     lidar_frame: str = "lidar_link"
+    # How the 2D LiDAR's rays follow the body: "base" (tilt with it) or "yaw" (stay level; for robots whose body pitches
+    # and rolls while moving, such as legged robots).
+    lidar_ray_alignment: str = "base"
     camera_frame: str = "camera_link"
     sensor_height: float = 0.35
     lidar_offset: tuple[float, float, float] = (0.0, 0.0, 0.35)
@@ -104,6 +107,8 @@ class RobotEmbodimentCfg:
     def __post_init__(self) -> None:
         if self.drive_type not in DRIVE_TYPES:
             raise ValueError(f"Unknown drive_type '{self.drive_type}'. Expected one of: {DRIVE_TYPES}")
+        if self.lidar_ray_alignment not in ("base", "yaw"):
+            raise ValueError(f"lidar_ray_alignment must be 'base' or 'yaw', got '{self.lidar_ray_alignment}'")
         unknown = [s for s in self.sensors if s not in SENSORS]
         if unknown:
             raise ValueError(f"Unknown sensors {unknown}. Expected a subset of: {SENSORS}")

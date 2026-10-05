@@ -231,3 +231,14 @@ def test_embodiment_owns_timing_spawn_height_and_contact_bodies(scene_usd):
     # The render rates are physical (33 Hz viewport, 5 Hz with cameras), so they scale with the timestep.
     assert cfg.sim.render_interval == 6
     assert _cfg(scene_usd, robot_name="timing_test_robot", enable_camera=True).sim.render_interval == 40
+
+
+def test_go2_task_cfg_takes_the_policy_timing_and_level_lidar(scene_usd):
+    """Verify the PointNav env for Go2 runs physics at 0.005 s, renders cameras at 5 Hz, and keeps the LiDAR level."""
+    cfg = _cfg(scene_usd, robot_name="go2", robot_spawn_pos=(0.0, 0.0))
+    assert (cfg.sim.dt, cfg.decimation) == (0.005, 4)
+    assert _cfg(scene_usd, robot_name="go2", enable_camera=True).sim.render_interval == 40
+    assert cfg.scene.robot.init_state.pos == (0.0, 0.0, 0.4)
+    assert cfg.scene.lidar.ray_alignment == "yaw"
+    assert cfg.scene.contact_forces.prim_path.endswith("/Robot/(base|.*_hip|.*_thigh|.*_calf)")
+    assert type(cfg.actions.robot_action).__name__ == "PreTrainedPolicyActionCfg"
