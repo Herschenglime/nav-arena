@@ -1,0 +1,14 @@
+{
+  "terminal_cause": "goal_reached",
+  "success": true,
+  "steps": 945,
+  "sim_time_s": 18.899999999999686,
+  "time_to_goal_s": 18.899999999999686,
+  "initial_goal_distance_m": 5.999942779541016,
+  "final_goal_distance_m": 0.40079620480537415,
+  "path_length_m": 5.613246479114334,
+  "plans": 95,
+  "stop_requests": 0,
+  "mean_inference_ms": 7.96238165838938,
+  "wall_time_s": 17.560185756068677
+}

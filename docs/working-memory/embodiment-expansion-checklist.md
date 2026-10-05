@@ -7,15 +7,16 @@ Update this file in the same commit as the work it describes, so it always match
 - **Rules:** commit locally, never push (the user pushes). Headless sims via `./agy_python.sh` are OK; GUI checks
   and the Nav2 regression are the user's. Install packages only into `env_isaaclab` with `uv pip --no-deps`.
 - **Last updated:** 2026-10-04
-- **Next action:** record the pre-refactor baseline for nova_carter and dingo (Phase 0, step 0)
+- **Next action:** Phase 0 step 1 (3-wide body-twist command)
 
 ## Phase 0: drive-agnostic base (diff-drive results must not change)
 
-- [ ] 0. Record the baseline BEFORE changing code (`docs/working-memory/embodiment-expansion-baseline.md`):
-  - [ ] unit tests pass (`pytest -c nav_arena/pyproject.toml nav_arena/tests/unit -q`)
-  - [ ] `verify_embodiment --robot nova_carter --camera` and `--robot dingo --camera`
-  - [ ] `verify_task --robot nova_carter --camera` and `--robot dingo --camera`
-  - [ ] `verify_baseline --method iplanner --robot dingo --route hall_straight` (and nova_carter)
+- [x] 0. Baseline recorded BEFORE changing code: see `embodiment-expansion-baseline.md` (runs are deterministic, so
+  the post-refactor comparison is exact; nova_carter's camera check already FAILS on `main`, which is expected)
+  - [x] unit tests pass (441)
+  - [x] `verify_embodiment --camera` for nova_carter (camera check fails, pre-existing) and dingo
+  - [x] `verify_task --camera` for both
+  - [x] `verify_baseline --method iplanner --route hall_straight` for both
 - [ ] 1. Body-twist `[vx, vy, wz]` command everywhere
   - [ ] `DifferentialDriveAction`: `action_dim = 3`, 3-tuple scale/offset, `vy` ignored
   - [ ] `runner.py`: warm-up and step actions width 3, width read from the task
@@ -54,6 +55,9 @@ Update this file in the same commit as the work it describes, so it always match
 - [ ] Docs updated; Phase 2 committed
 
 ## Notes and decisions log
+
+- 2026-10-04: baseline finding: nova_carter's camera sees its own chassis (nearest depth 0.061 m, depth max 0.12 m) on `main`.
+  Not part of this work; consider a separate fix. Check whether `hall_straight` results for nova_carter are meaningful.
 
 - 2026-10-04: Go2 policy verified to exist; no training needed. Nav2 for new robots is out of scope (future work).
 - 2026-10-04: Kaya selected over O3dyn (too large) and Ridgeback (arm only). Lab mecanum robot is future work.
