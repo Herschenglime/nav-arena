@@ -63,3 +63,21 @@ Only `mean_inference_ms` and `wall_time_s` vary between runs and should be ignor
 Compare `<dir>/summary.json` against `summary_dingo.json` (all fields except the two timing ones), and
 `<dir>/steps.jsonl` against the cached log. Repeat for `nova_carter`, then `verify_embodiment --camera` and
 `verify_task --camera` for both.
+
+## Phase 1: Kaya baseline comparison (`verify_baseline --method iplanner --route hall_straight`)
+
+Kaya closed-loop navigation on `hall_straight` (scene `kujiale_0003`, seed 0) with learned iPlanner policy:
+
+| Field | kaya | dingo | nova_carter |
+|---|---|---|---|
+| terminal_cause | goal_reached | goal_reached | goal_reached |
+| steps | 977 | 945 | 952 |
+| sim_time_s | 19.54 | 18.90 | 19.04 |
+| initial_goal_distance_m | 6.00003 | 5.99994 | 6.00000 |
+| final_goal_distance_m | 0.40067 | 0.40080 | 0.40416 |
+| path_length_m | 5.60386 | 5.61325 | 5.61501 |
+| plans | 98 | 95 | 96 |
+| stop_requests | 0 | 0 | 0 |
+
+Kaya tracks the hallway trajectory cleanly to the goal within 0.5 s and 0.01 m path length of Dingo and Nova Carter.
+

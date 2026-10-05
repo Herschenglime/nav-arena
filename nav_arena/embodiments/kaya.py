@@ -141,9 +141,10 @@ class KayaEmbodimentCfg(RobotEmbodimentCfg):
     chassis_frame: str = "base_link"
     body_link: str = "base_link"
 
-    # The wheel bodies and roller bodies carry the floor traction forces, so a contact sensor on
-    # base_link reads only actual body-to-obstacle contacts, not normal floor support.
-    ground_contact_on_body: bool = False
+    # Include all articulation bodies (chassis, wheels, rollers) in contact sensing with lateral
+    # force filtering so collisions on protruding wheels/rollers trigger without floor false positives.
+    contact_bodies: str = ".*"
+    ground_contact_on_body: bool = True
 
     # Sensor frame names.
     lidar_frame: str = "lidar_link"

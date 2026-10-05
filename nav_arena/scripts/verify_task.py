@@ -86,10 +86,10 @@ def run_verification():
 
 
     # Robot spawn location and target goal in the wide living room opening
-    spawn_pos = (-2.5, 0.0)
+    spawn_pos = (-2.5, -0.25)
     spawn_rot = (0.0, 0.0, 0.0, 1.0)
     # Target goal 1.5m straight ahead along +X
-    goal_pos = (-1.0, 0.0)
+    goal_pos = (-1.0, -0.25)
     goal_heading = 0.0
     goal_threshold = 0.4
 
@@ -114,7 +114,7 @@ def run_verification():
     task = PointNavTask(cfg=env_cfg)
 
     # Position viewport camera to frame the robot and goal runway in the living room
-    task.sim.set_camera_view(eye=[-1.75, -2.8, 2.2], target=[-1.75, 0.0, 0.3])
+    task.sim.set_camera_view(eye=[-1.75, -3.05, 2.2], target=[-1.75, -0.25, 0.3])
 
     # Reset environment
     logger.info("Resetting environment...")

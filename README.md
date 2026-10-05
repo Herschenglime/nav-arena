@@ -138,11 +138,12 @@ python -u nav_arena/nav_arena/scripts/verify_nav2.py --spawn-x -2.5 --spawn-y 0.
 ```
 
 ### Embodiment Verification
-Validates a registered embodiment's differential kinematics, exercises `DifferentialDriveAction`, reads 2D LiDAR range arrays, and validates displacement. `--robot` selects any registered embodiment (`nova_carter` by default, or `dingo`); `--camera` additionally mounts the RGB-D camera and checks the RGB / metric-depth tensors:
+Validates a registered embodiment's kinematics (differential or holonomic), exercises drive action terms, reads 2D LiDAR range arrays, and validates displacement. `--robot` selects any registered embodiment (`nova_carter` by default, `dingo`, or `kaya`); `--camera` additionally mounts the RGB-D camera and checks the RGB / metric-depth tensors:
 ```bash
 source setup.env
 python -u nav_arena/nav_arena/scripts/verify_embodiment.py
 python -u nav_arena/nav_arena/scripts/verify_embodiment.py --robot dingo --camera
+python -u nav_arena/nav_arena/scripts/verify_embodiment.py --robot kaya --camera
 ```
 
 ### Learned Baseline In-Process Verifier (Developer Shim)
@@ -327,15 +328,17 @@ nav_arena/
 │   │   ├── tracking.py                # Run querying, summaries, and results.csv comparisons
 │   │   └── doctor.py                  # System diagnostic health auditor
 │   ├── embodiments/                   # Robot kinematics, sensor factories, in-memory URDF
-│   │   ├── actions.py                 # DifferentialDriveActionCfg & ActionAdapter
+│   │   ├── actions.py                 # Differential & Holonomic drive actions & ActionAdapter
 │   │   ├── assets.py                  # Derived robot USDs: upstream sublayer + baked-in fixes
 │   │   ├── base.py                    # RobotEmbodimentCfg (frames, geometry, sensors, body_link)
 │   │   ├── dingo.py                   # Clearpath Dingo differential base configuration
-│   │   ├── kinematics.py              # Pure math differential drive kinematics (FK & IK)
+│   │   ├── kaya.py                    # NVIDIA Kaya 3-omni holonomic base configuration
+│   │   ├── kinematics.py              # Pure math differential & holonomic kinematics (FK & IK)
 │   │   ├── nova_carter.py             # Nova Carter differential base configuration
 │   │   ├── registry.py                # register_embodiment / get_embodiment / list_embodiments
 │   │   ├── sensors.py                 # Planar 2D LiDAR raycaster and RGB-D pinhole camera configuration
-│   │   └── urdf.py                    # Programmatic URDF string synthesis
+│   │   ├── urdf.py                    # Programmatic URDF string synthesis
+│   │   └── wheel_geometry.py          # Omnidirectional wheel geometry extraction from USD
 │   ├── methods/                       # Autonomy baselines and external stacks
 │   │   ├── in_process/                # Policies run inside the simulation process (no ROS 2)
 │   │   │   ├── base.py                # InProcessPolicy contract, PolicyObservation, Plan
@@ -358,6 +361,7 @@ nav_arena/
 │   │   └── point_nav.py               # PointNavTask environment & MDP configuration
 │   ├── tools/                         # Offline utilities (CLI 2D map generator, route overlay)
 │   │   ├── map_generator.py           # Programmatic 2D occupancy grid generation tool
+│   │   ├── map_visualizer.py          # Generalized coordinate-grid map & trajectory visualizer
 │   │   └── route_map.py               # Render routes and recorded runs over a cached occupancy map
 │   ├── utils/                         # Cross-cutting primitives and helpers
 │   │   ├── cli_args.py                # Pure argument checks usable before the simulator boots

@@ -5,13 +5,14 @@ action term that drives it, wheel geometry, the frames and mounting points for s
 is then selectable everywhere with `--robot <name>` (`verify_embodiment.py`, `verify_task.py`, `verify_baseline.py`)
 and via `create_point_nav_env_cfg(robot_name=...)`.
 
-Existing examples to copy from: [`embodiments/nova_carter.py`](../../nav_arena/embodiments/nova_carter.py) (simple) and
-[`embodiments/dingo.py`](../../nav_arena/embodiments/dingo.py) (single rigid body, derived USD, camera).
+Existing examples to copy from: [`embodiments/nova_carter.py`](../../nav_arena/embodiments/nova_carter.py) (simple),
+[`embodiments/dingo.py`](../../nav_arena/embodiments/dingo.py) (single rigid body, derived USD, camera), and
+[`embodiments/kaya.py`](../../nav_arena/embodiments/kaya.py) (3-omni holonomic drive, dynamic USD wheel geometry, passive rollers).
 
 Every embodiment takes the same command, the body-frame twist `[vx, vy, wz]` (forward m/s, left m/s, yaw rad/s). A
 differential drive ignores `vy`; holonomic and legged robots use it. What differs per robot is how the twist becomes
-joint targets (the action term), its limits, and its physics timing. Today differential drive is implemented end to
-end; adding holonomic or quadruped robots is covered in [Adding a new drive type](#adding-a-new-drive-type).
+joint targets (the action term), its limits, and its physics timing. Both differential and holonomic drives are implemented
+end to end; adding quadruped robots is covered in [Adding a new drive type](#adding-a-new-drive-type).
 
 ## 1. Inspect the USD first
 

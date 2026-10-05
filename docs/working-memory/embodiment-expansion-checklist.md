@@ -54,9 +54,9 @@ Update this file in the same commit as the work it describes, so it always match
 - [x] 4. `embodiments/kaya.py` with variants `kaya.mast` (default) and `kaya.native`; register and export (committed)
 - [x] 5. Roller-jitter check in `verify_embodiment`: zero-command drift < 0.004 m over 1.0s; tuned wheel damping to USD authored 174.5 (committed)
 - [x] 6. Per-axis drive check in `verify_embodiment.py` (forward, strafe, rotate) (committed)
-- [ ] 7. `tests/integration/test_integration_kaya.py` (includes the `HolonomicController` cross-check)
-- [ ] 8. Closed loop `verify_baseline` for kaya vs nova_carter
-- [ ] Docs updated; Phase 1 committed
+- [x] 7. `tests/integration/test_integration_kaya.py` (includes the `HolonomicController` cross-check)
+- [x] 8. Closed loop `verify_baseline` for kaya vs nova_carter
+- [x] Docs updated; Phase 1 committed
 
 ## Phase 2: quadruped (Unitree Go2)
 
