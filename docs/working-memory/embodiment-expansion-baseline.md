@@ -94,3 +94,24 @@ Kaya closed-loop navigation on `hall_straight` (scene `kujiale_0003`, seed 0) wi
 
 Kaya tracks the hallway trajectory cleanly to the goal within 0.5 s and 0.01 m path length of Dingo and Nova Carter.
 
+
+## Phase 2 step 0: episodes start from rest (re-recorded 2026-10-05)
+
+The runner now holds a zero command after reset until the robot's pose stops changing (`EpisodeCfg.settle`, pose over
+0.5 s windows), instead of a fixed 10-step (0.2 s) warm-up. Runs stay deterministic (Dingo repeated: identical).
+`verify_baseline --method iplanner --route hall_straight`, seed 0:
+
+| Field | dingo | nova_carter | kaya |
+|---|---|---|---|
+| settle_s | 1.0 | 1.0 | 3.5 |
+| terminal_cause | **stalled** | goal_reached | goal_reached |
+| steps | 984 | 952 | 975 |
+| final_goal_distance_m | 3.12 | 0.405 | 0.403 |
+| path_length_m | 2.88 | 5.62 | 5.60 |
+| plans | 99 | 96 | 98 |
+
+**Dingo now stalls, and this is the planner, not the change.** The trajectories match the old run to about 1.5 cm until
+x = -3.55 m, where iPlanner's predicted collision "fear" crosses its 0.7 stop threshold (0.71) and it requests a stop. Once
+stopped it keeps seeing the same view (fear 0.85) and never resumes. In the old run fear peaked at 0.63 at the same spot,
+just under the threshold. So the old "goal_reached" was marginal: a centimetre-scale change in the start flips the outcome.
+Single-route, single-start results are fragile; comparisons between methods should use several starts or seeds.

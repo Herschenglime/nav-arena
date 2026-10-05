@@ -124,6 +124,7 @@ class GoalSeeker(InProcessPolicy):
 
 def _cfg(**kw):
     kw.setdefault("follower", FollowerCfg(goal_tolerance=0.4))
+    kw.setdefault("settle", None)  # most tests count exact steps; the settle has its own tests
     return EpisodeCfg(**kw)
 
 
@@ -171,7 +172,7 @@ def test_policy_stop_holds_the_robot_until_the_step_budget_ends():
 @pytest.mark.parametrize("cause", ["collision", "tipped"])
 def test_terminal_causes_are_reported(cause):
     """Verify collision and tipped terminations are surfaced and are not successes."""
-    result = run_episode(FakeTask(forced_cause=cause), GoalSeeker(), _cfg())
+    result = run_episode(FakeTask(forced_cause=cause), GoalSeeker(), _cfg(warmup_steps=0))
     assert result.terminal_cause == cause and not result.success
     assert result.time_to_goal_s is None
 
@@ -387,3 +388,40 @@ def test_rejects_a_task_that_does_not_take_a_body_twist():
     task.action_dim = 2
     with pytest.raises(ValueError, match="body twist"):
         run_episode(task, GoalSeeker(), _cfg())
+
+
+def test_settle_holds_until_the_robot_is_still_and_is_recorded(tmp_path):
+    """Verify the runner keeps a zero command until the pose stops changing and records how long that took."""
+    import json
+
+    from nav_arena.utils.drive_check import SettleCfg
+
+    task = FakeTask()
+    run_episode(task, GoalSeeker(), _cfg(warmup_steps=3, settle=SettleCfg(window_s=0.1, still_windows=2), output_dir=tmp_path))
+    settle_steps = 3 + 2 * round(0.1 / task.step_dt)  # the fake robot is still at once: two quiet windows
+    assert task.actions[:settle_steps] == [(0.0, 0.0)] * settle_steps
+    settings = json.loads((tmp_path / "settings.json").read_text())
+    assert settings["settle_s"] == pytest.approx(0.2)
+
+
+def test_a_robot_that_never_settles_aborts_the_episode():
+    """Verify a robot that keeps moving under a zero command is an error, not a silently shifted start."""
+    from nav_arena.utils.drive_check import SettleCfg
+
+    class Drifting(FakeTask):
+        def step(self, action):
+            out = super().step(action)
+            self.pose = self.pose + np.array([0.01, 0.0, 0.0])
+            return out
+
+    with pytest.raises(RuntimeError, match="still moving"):
+        run_episode(Drifting(), GoalSeeker(), _cfg(settle=SettleCfg(window_s=0.1, max_s=1.0)))
+
+
+def test_falling_over_while_settling_is_an_error():
+    """Verify an episode that terminates during the settle (a legged robot falling on spawn) raises."""
+    from nav_arena.utils.drive_check import SettleCfg
+
+    task = FakeTask(forced_cause="tipped")
+    with pytest.raises(RuntimeError, match="settling"):
+        run_episode(task, GoalSeeker(), _cfg(warmup_steps=0, settle=SettleCfg(window_s=0.1)))

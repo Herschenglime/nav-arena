@@ -28,6 +28,7 @@ from typing import Any
 import numpy as np
 
 from nav_arena.utils import get_logger
+from nav_arena.utils.drive_check import SettleCfg, settle_until_still
 from nav_arena.utils.run_dir import recorded_artifacts
 
 from .base import InProcessPolicy, Plan, PolicyObservation
@@ -45,7 +46,10 @@ class EpisodeCfg:
     follower: FollowerCfg = field(default_factory=FollowerCfg)
     """Path-follower limits; its ``goal_tolerance`` should not exceed the task's goal threshold."""
     warmup_steps: int = 10
-    """Zero-velocity steps after reset so physics settles before the first plan."""
+    """Zero-velocity steps after reset before the settle check starts."""
+    settle: SettleCfg | None = field(default_factory=SettleCfg)
+    """After the warm-up, keep holding a zero command until the robot's pose stops changing, so the first plan starts
+    from rest (robots bounce or shift after the spawn drop; a legged robot must be standing). ``None`` skips it."""
     min_valid_depth_fraction: float = 0.05
     """Minimum fraction of finite positive depth pixels; fewer aborts the run (camera orientation/rendering fault)."""
     output_dir: Path | None = None
@@ -187,8 +191,22 @@ def run_episode(task: Any, policy: InProcessPolicy, cfg: EpisodeCfg | None = Non
     if task.action_dim != BODY_TWIST_DIM:
         raise ValueError(f"Expected a body twist action of width {BODY_TWIST_DIM}, but the task takes {task.action_dim}")
     zero = torch.zeros((1, task.action_dim), device=task.device)
+
+    def hold_still() -> None:
+        _, _, terminated, truncated, _ = task.step(zero)
+        if bool(terminated.any()) or bool(truncated.any()):
+            raise RuntimeError(
+                f"The episode ended while the robot was settling ({task.get_terminal_cause() or 'time_out'}); "
+                "it should stand still under a zero command"
+            )
+
     for _ in range(cfg.warmup_steps):
-        task.step(zero)
+        hold_still()
+    settle_s = None
+    if cfg.settle is not None:
+        settle_s = settle_until_still(hold_still, task.get_robot_pose_w, step_dt, cfg.settle)
+        if settle_s is None:
+            raise RuntimeError(f"The robot was still moving {cfg.settle.max_s:.0f} s after reset under a zero command")
 
     goal_x, goal_y, _ = task.get_goal_pose_w()
     goal_xy = np.array([goal_x, goal_y])
@@ -200,7 +218,7 @@ def run_episode(task: Any, policy: InProcessPolicy, cfg: EpisodeCfg | None = Non
         cfg.output_dir,
         cfg,
         policy,
-        dict(goal_xy=goal_xy.tolist(), plan_period_steps=plan_period, step_dt=step_dt, follower_goal_tolerance=cfg.follower.goal_tolerance),
+        dict(goal_xy=goal_xy.tolist(), plan_period_steps=plan_period, step_dt=step_dt, settle_s=settle_s, follower_goal_tolerance=cfg.follower.goal_tolerance),
     )
     if recorder.dir is not None and goal_image is not None:
         from PIL import Image

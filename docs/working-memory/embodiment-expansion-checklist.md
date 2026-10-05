@@ -7,7 +7,7 @@ Update this file in the same commit as the work it describes, so it always match
 - **Rules:** commit locally, never push (the user pushes). Headless sims via `./agy_python.sh` are OK; GUI checks
   and the Nav2 regression are the user's. Install packages only into `env_isaaclab` with `uv pip --no-deps`.
 - **Last updated:** 2026-10-05
-- **Next action:** Phase 2 step 1 (fetch and cache the Go2 policy, verify its SHA-256)
+- **Next action:** Phase 2 step 2-3 (register go2, `lidar_ray_alignment`, verify_embodiment at the embodiment's dt)
 
 ## Phase 0: drive-agnostic base (diff-drive results must not change)
 
@@ -70,10 +70,10 @@ Update this file in the same commit as the work it describes, so it always match
 
 ## Phase 2: quadruped (Unitree Go2)
 
-- [ ] 0. Settle-until-still episode warm-up. The runner's warm-up is 10 steps (0.2 s), so Kaya starts episodes while still
-  settling (~2 cm, ~2 deg) and Go2 will need a standing start. Make the warm-up wait for the pose to stop changing (as
-  `verify_embodiment`'s settle does) or embodiment-owned. This changes the diff-drive baseline: re-record it.
-
+- [x] 0. Settle-until-still episode start: `settle_until_still` in `nav_arena/utils/drive_check.py`, used by the runner
+  (`EpisodeCfg.settle`; raises if the episode ends or the robot never settles) and by `verify_embodiment`. Settle time is
+  recorded in `settings.json`. Baseline re-recorded: Dingo now STALLS on hall_straight (iPlanner fear 0.71 vs threshold 0.7
+  at x = -3.55; it was 0.63 before) -> the old success was marginal; see the baseline doc.
 - [ ] 1. `embodiments/policies.py`: fetch and cache `physx_policy.pt`, verify SHA-256 `984c802b…abe0f`, env override
 - [ ] 2. `embodiments/go2.py` with `PreTrainedPolicyActionCfg` (`debug_vis=False`, `low_level_decimation=4`)
 - [ ] 3. `lidar_ray_alignment` field (`yaw` for Go2)

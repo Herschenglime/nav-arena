@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 import argparse
-import math
 import sys
 import torch
 
@@ -257,7 +256,13 @@ def run_verification(simulation_app):
         return
 
     # Drive checks (per axis, driven by the embodiment's limits). The pass/fail rules live in nav_arena.utils.drive_check.
-    from nav_arena.utils.drive_check import evaluate_hold, evaluate_segment, measure_segment, wrap_angle, yaw_from_quat_xyzw
+    from nav_arena.utils.drive_check import (
+        evaluate_hold,
+        evaluate_segment,
+        measure_segment,
+        settle_until_still,
+        yaw_from_quat_xyzw,
+    )
 
     dt = sim.get_physics_dt()
 
@@ -284,26 +289,7 @@ def run_verification(simulation_app):
         run([0.0, 0.0, 0.0], brake_s)
         return measure_segment(command, start_xy, start_yaw, end_xy, end_yaw, measure_s, mid_xy, mid_yaw)
 
-    def settle(max_s=8.0, window_s=0.5, still_windows=2, max_shift=0.002, max_turn=0.005):
-        """Hold a zero command until the pose stops changing (the spawn drop makes some robots bounce and shift).
-
-        Stillness is judged on the pose over whole windows, not on the instantaneous velocity, which chatters for
-        robots with many contacts (Kaya's rollers) and made the check pass or fail from run to run.
-        """
-        quiet, elapsed = 0, 0.0
-        last_xy, last_yaw = pose()
-        while elapsed < max_s:
-            run([0.0, 0.0, 0.0], window_s)
-            elapsed += window_s
-            xy, yaw = pose()
-            moved = math.dist(xy, last_xy) > max_shift or abs(wrap_angle(yaw - last_yaw)) > max_turn
-            quiet = 0 if moved else quiet + 1
-            last_xy, last_yaw = xy, yaw
-            if quiet >= still_windows:
-                return elapsed
-        return None
-
-    settle_s = settle()
+    settle_s = settle_until_still(lambda: run([0.0, 0.0, 0.0], dt), lambda: (*pose()[0], pose()[1]), dt)
     logger.check("Robot settles after spawn", settle_s is not None, f"still after {settle_s:.2f} s" if settle_s else "still moving after 8 s")
     assert settle_s is not None, "Robot never came to rest after spawning"
     passed, detail = evaluate_hold(segment([0.0, 0.0, 0.0], warmup_s=0.0, brake_s=0.0))

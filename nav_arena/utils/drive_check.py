@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-from typing import Sequence
+from typing import Callable, Sequence
 
 AXES = ("vx", "vy", "wz")
 
@@ -159,3 +159,49 @@ def evaluate_hold(result: SegmentResult, max_translation: float = 0.01, max_yaw:
     passed = translation <= max_translation and abs(result.dyaw) <= max_yaw
     detail = f"drift={translation:.4f} m (max {max_translation}), dyaw={result.dyaw:+.4f} rad (max {max_yaw}) over {result.duration_s:.1f} s"
     return passed, detail
+
+
+@dataclass(frozen=True)
+class SettleCfg:
+    """When a robot counts as at rest: its pose changes by less than the limits over consecutive windows."""
+
+    window_s: float = 0.5
+    still_windows: int = 2
+    max_shift: float = 0.002
+    """Metres the root may move within one window."""
+    max_turn: float = 0.005
+    """Radians the heading may change within one window."""
+    max_s: float = 8.0
+    """Give up after this long."""
+
+
+def settle_until_still(step: Callable[[], None], pose: Callable[[], tuple[float, float, float]], step_dt: float, cfg: SettleCfg | None = None) -> float | None:
+    """Hold the robot (``step`` applies a zero command) until its pose stops changing.
+
+    Stillness is judged on the pose over whole windows rather than the instantaneous velocity, which chatters for robots
+    with many contacts (Kaya's rollers) even when they are not going anywhere.
+
+    Args:
+        step: Advances the simulation by one ``step_dt`` with a zero command.
+        pose: Returns the robot's ``(x, y, yaw)``.
+        step_dt: Seconds per ``step`` call.
+        cfg: Stillness limits.
+
+    Returns:
+        Seconds until the robot was still, or None if it was still moving after ``cfg.max_s``.
+    """
+    cfg = cfg or SettleCfg()
+    steps_per_window = max(1, round(cfg.window_s / step_dt))
+    quiet, elapsed = 0, 0.0
+    last = pose()
+    while elapsed < cfg.max_s:
+        for _ in range(steps_per_window):
+            step()
+        elapsed += steps_per_window * step_dt
+        current = pose()
+        moved = math.dist(current[:2], last[:2]) > cfg.max_shift or abs(wrap_angle(current[2] - last[2])) > cfg.max_turn
+        quiet = 0 if moved else quiet + 1
+        last = current
+        if quiet >= cfg.still_windows:
+            return elapsed
+    return None
