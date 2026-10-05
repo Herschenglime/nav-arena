@@ -67,23 +67,31 @@ def lateral_contact(
     env: ManagerBasedRLEnv,
     threshold: float,
     sensor_cfg: SceneEntityCfg,
+    exclude_filtered_floor: bool = False,
 ) -> torch.Tensor:
     """Terminate when the horizontal contact force on the sensor bodies exceeds a threshold.
 
     For robots whose body link also carries a ground-contacting part (e.g. the Dingo's caster sphere), the floor's
-    vertical support force would trip a net-force check immediately. Walls and obstacles act through horizontal
-    normals, so only the world-frame XY force components are considered.
+    vertical support force would trip a net-force check immediately. Floor seams also produce horizontal
+    support forces, so configured floor-body forces are subtracted before checking horizontal obstacle forces.
 
     Args:
         env: Manager-based RL environment instance.
         threshold: Lateral force magnitude in Newtons.
         sensor_cfg: Contact sensor entity.
+        exclude_filtered_floor: If True, subtract filtered floor contact forces before checking lateral threshold.
 
     Returns:
         Boolean tensor of shape (num_envs,).
     """
     sensor = env.scene.sensors[sensor_cfg.name]
     forces = sensor.data.net_forces_w_history.torch[:, :, sensor_cfg.body_ids]
+    if exclude_filtered_floor:
+        floor_history = sensor.data.force_matrix_w_history
+        if floor_history is None:
+            raise RuntimeError("Floor-filtered collision detection requires filtered contact force history")
+        floor_forces = floor_history.torch[:, :, sensor_cfg.body_ids].sum(dim=-2)
+        forces = forces - floor_forces
     lateral = torch.linalg.norm(forces[..., :2], dim=-1)
     return torch.any(torch.max(lateral, dim=1)[0] > threshold, dim=1)
 
@@ -339,9 +347,27 @@ def create_point_nav_env_cfg(
     env_cfg.terminations.goal.params["threshold"] = goal_threshold
     env_cfg.terminations.collision.params["threshold"] = collision_threshold
     if embodiment.ground_contact_on_body:
+        # Enumerate exact bodies: this PhysX backend requires each filter to match one body.
+        # Wildcards spanning several floor bodies cannot initialize a filtered contact view.
+        from pxr import Usd, UsdPhysics
+
+        contact_stage = Usd.Stage.Open(base_scene.scene_asset.spawn.usd_path, load=Usd.Stage.LoadNone)
+        floor_paths = []
+        if contact_stage is not None:
+            floor_paths = [
+                "/World/Scene" + str(prim.GetPath())[len("/Root") :]
+                for prim in contact_stage.Traverse()
+                if str(prim.GetPath()).startswith("/Root/Meshes/floor/")
+                and prim.HasAPI(UsdPhysics.RigidBodyAPI)
+            ]
+        env_cfg.scene.contact_forces.filter_prim_paths_expr = floor_paths
         env_cfg.terminations.collision = TerminationTermCfg(
             func=lateral_contact,
-            params={"sensor_cfg": SceneEntityCfg("contact_forces"), "threshold": collision_threshold},
+            params={
+                "sensor_cfg": SceneEntityCfg("contact_forces"),
+                "threshold": collision_threshold,
+                "exclude_filtered_floor": bool(floor_paths),
+            },
             time_out=False,
         )
     env_cfg.terminations.tipped.params["limit_angle"] = max_tilt

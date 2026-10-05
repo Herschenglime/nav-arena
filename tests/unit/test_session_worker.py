@@ -188,6 +188,7 @@ def test_run_session_mocked_execution(tmp_path):
             assert session.is_open
             mock_cfg_fn.assert_called_once()
             mock_task_cls.assert_called_once()
+            assert mock_task_cls.call_args.kwargs["cfg"].seed == spec.seed
             mock_get_policy.assert_called_once()
 
             result = session.run_episode()

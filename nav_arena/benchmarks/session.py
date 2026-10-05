@@ -246,6 +246,7 @@ class RunSession:
             show_goal_marker=show_goal_marker,
             scene_queries=follow,
         )
+        env_cfg.seed = ep.seed
         self.task = PointNavTask(cfg=env_cfg, render_mode=self.render_mode)
 
     def _build_viewer(self, ep: EpisodeSpec, gui: bool, follow: bool) -> None:

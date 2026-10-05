@@ -242,3 +242,22 @@ def test_go2_task_cfg_takes_the_policy_timing_and_level_lidar(scene_usd):
     assert cfg.scene.lidar.ray_alignment == "yaw"
     assert cfg.scene.contact_forces.prim_path.endswith("/Robot/(base|.*_hip|.*_thigh|.*_calf)")
     assert type(cfg.actions.robot_action).__name__ == "PreTrainedPolicyActionCfg"
+
+
+def test_lateral_contact_subtracts_floor_seam_but_preserves_obstacle_force():
+    """Floor-normal XY impulses must not mask or imitate a wall collision."""
+    floor = torch.zeros(2, 3, 1, 2, 3)
+    floor[:, 1, 0, 0, :] = torch.tensor([2.15, 0.01, 14.70])
+    total = floor.sum(dim=-2)
+    total[1, 1, 0, 0] += 3.0
+    env = _sensor_env(total)
+    env.scene.sensors["contact_forces"].data.force_matrix_w_history = SimpleNamespace(torch=floor)
+    assert lateral_contact(env, 1.0, _entity(), exclude_filtered_floor=True).tolist() == [False, True]
+
+
+def test_lateral_contact_requires_floor_history_when_configured():
+    env = _sensor_env(torch.zeros(1, 3, 1, 3))
+    env.scene.sensors["contact_forces"].data.force_matrix_w_history = None
+    with pytest.raises(RuntimeError, match="filtered contact force history"):
+        lateral_contact(env, 1.0, _entity(), exclude_filtered_floor=True)
+
