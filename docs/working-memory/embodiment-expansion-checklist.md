@@ -7,7 +7,7 @@ Update this file in the same commit as the work it describes, so it always match
 - **Rules:** commit locally, never push (the user pushes). Headless sims via `./agy_python.sh` are OK; GUI checks
   and the Nav2 regression are the user's. Install packages only into `env_isaaclab` with `uv pip --no-deps`.
 - **Last updated:** 2026-10-04
-- **Next action:** Phase 0 step 5 (drive-aware follower returning `(vx, vy, wz)`)
+- **Next action:** Phase 0 step 6 (embodiment variants, `sensors` field, `tools robots list`)
 
 ## Phase 0: drive-agnostic base (diff-drive results must not change)
 
@@ -25,7 +25,7 @@ Update this file in the same commit as the work it describes, so it always match
 - [x] 2. `RobotEmbodimentCfg`: `drive_type` (`diff | holonomic | quadruped`, validated), `max_lateral_speed`, `is_policy_driven()` (committed)
 - [x] 3. Embodiment-owned `sim_dt`, `decimation`, `spawn_height` (+ `step_dt`); render intervals derived from rates (33 Hz / 5 Hz); `session.py` step dt from the embodiment; scripts pass 2-tuple spawn so z comes from the embodiment (committed)
 - [x] 4. `contact_bodies` separate from `body_link` (`contact_body_expr`) (committed)
-- [ ] 5. Drive-aware `follow_path -> (vx, vy, wz)`; bit-identical when `max_lateral_speed == 0`
+- [x] 5. Drive-aware `follow_path -> (vx, vy, wz)`; bit-identical when `max_lateral_speed == 0` (tested on 500 random paths); session passes `min(embodiment.max_lateral_speed, max_speed)` (committed)
 - [ ] 6. Embodiment variants (`kaya.mast`, bare name = default), `sensors` field, `nav_arena tools robots list`
 - [ ] 7. Unit tests and docs updated (`adding-a-robot.md` drive-type section)
 - [ ] Exit: unit tests pass; nova_carter and dingo match the recorded baseline

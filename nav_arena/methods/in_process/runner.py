@@ -310,8 +310,7 @@ def run_episode(task: Any, policy: InProcessPolicy, cfg: EpisodeCfg | None = Non
         if stop:
             vx = vy = wz = 0.0
         else:
-            vx, wz = follow_path(world_to_body(path_world, np.array([x, y]), yaw), distance, cfg.follower)
-            vy = 0.0
+            vx, vy, wz = follow_path(world_to_body(path_world, np.array([x, y]), yaw), distance, cfg.follower)
         command = torch.tensor([[vx, vy, wz]], dtype=torch.float32, device=task.device)
         _, _, terminated, truncated, _ = task.step(command)
         steps += 1

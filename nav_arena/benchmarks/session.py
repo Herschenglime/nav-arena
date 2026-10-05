@@ -331,16 +331,19 @@ class RunSession:
             self.overlay.tolerance = ep.limits.goal_tolerance
             self.overlay.clear()
 
+        from nav_arena.embodiments import get_embodiment
         from nav_arena.methods.in_process import (
             EpisodeCfg,
             FollowerCfg,
             run_episode as run_in_process_episode,
         )
 
+        embodiment = get_embodiment(self.key.robot)
         episode_cfg = EpisodeCfg(
             max_steps=ep.limits.max_steps,
             follower=FollowerCfg(
                 max_speed=ep.limits.max_speed,
+                max_lateral_speed=min(embodiment.max_lateral_speed, ep.limits.max_speed),
                 goal_tolerance=ep.limits.goal_tolerance,
             ),
             output_dir=output,

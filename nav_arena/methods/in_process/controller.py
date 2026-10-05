@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Planar frame transforms and the shared differential-drive path follower.
+"""Planar frame transforms and the shared body-twist path follower.
 
 Ported from the NavDP Isaac Sim integration (``isaac_adapter.py``). Pure NumPy: no simulator dependencies.
 All positions are meters and yaw is radians. Body axes: X forward, Y left; world is Z-up.
@@ -67,15 +67,24 @@ class FollowerCfg:
     """Rotate in place while the heading error to the target exceeds this many radians."""
     goal_slowdown_gain: float = 0.7
     """Forward speed is capped at ``gain * goal_distance``, ramping down on approach."""
+    max_lateral_speed: float = 0.0
+    """Maximum sideways speed in m/s. ``0`` means the robot cannot strafe (differential drive)."""
+    heading_gain: float = 1.5
+    """Yaw rate per radian of heading error to the target."""
 
 
 def follow_path(
     path_body: np.ndarray, goal_distance: float, cfg: FollowerCfg | None = None
-) -> tuple[float, float]:
+) -> tuple[float, float, float]:
     """Track a body-frame path with a lookahead steering law.
 
     The robot moves between replans, so the already-passed part of the path is trimmed before choosing the
     lookahead target. Invalid, empty, or non-finite paths stop the robot.
+
+    Without lateral speed (``cfg.max_lateral_speed == 0``) the robot is a unicycle: it steers along an arc and turns
+    in place when the target is far off-heading. With lateral speed it keeps turning toward the target (the learned
+    policies see through a forward camera, so the robot should face where it travels) but translates toward the
+    target at the same time, using sideways motion for the lateral offset instead of stopping to turn.
 
     Args:
         path_body: Waypoints in the robot's *current* body frame, shape ``[T, >=2]``.
@@ -83,23 +92,31 @@ def follow_path(
         cfg: Follower limits.
 
     Returns:
-        Tuple ``(v, omega)``: forward speed in m/s and yaw rate in rad/s.
+        Body twist ``(vx, vy, wz)``: forward speed in m/s, sideways speed in m/s (left positive) and yaw rate in
+        rad/s.
     """
     cfg = cfg or FollowerCfg()
+    stop = (0.0, 0.0, 0.0)
     path = np.asarray(path_body, dtype=np.float32)
     if goal_distance <= cfg.goal_tolerance or path.ndim != 2 or len(path) == 0:
-        return 0.0, 0.0
+        return stop
     if path.shape[1] < 2 or not np.isfinite(path).all():
-        return 0.0, 0.0
+        return stop
     path = path[np.argmin(np.linalg.norm(path[:, :2], axis=1)) :]
     distances = np.linalg.norm(path[:, :2], axis=1)
     candidates = np.flatnonzero(distances >= cfg.lookahead)
     target = path[candidates[0] if len(candidates) else -1, :2]
     if np.linalg.norm(target) < 0.05:
-        return 0.0, 0.0
+        return stop
     heading = math.atan2(float(target[1]), float(target[0]))
+    yaw_rate = float(np.clip(cfg.heading_gain * heading, -cfg.max_yaw_rate, cfg.max_yaw_rate))
+    if cfg.max_lateral_speed > 0.0:
+        speed = min(cfg.max_speed, cfg.goal_slowdown_gain * goal_distance) * max(0.0, math.cos(heading))
+        direction = target / float(np.linalg.norm(target))
+        vy = float(np.clip(speed * direction[1], -cfg.max_lateral_speed, cfg.max_lateral_speed))
+        return speed * float(direction[0]), vy, yaw_rate
     if abs(heading) > cfg.turn_in_place_angle:
-        return 0.0, float(np.clip(1.5 * heading, -cfg.max_yaw_rate, cfg.max_yaw_rate))
+        return 0.0, 0.0, yaw_rate
     speed = min(cfg.max_speed, cfg.goal_slowdown_gain * goal_distance) * max(0.0, math.cos(heading))
     curvature = 2.0 * float(target[1]) / max(float(target @ target), 0.01)
-    return speed, float(np.clip(speed * curvature, -cfg.max_yaw_rate, cfg.max_yaw_rate))
+    return speed, 0.0, float(np.clip(speed * curvature, -cfg.max_yaw_rate, cfg.max_yaw_rate))
